@@ -133,7 +133,7 @@ Say ""
 # ------------------------------------------------------------- 4. temp files
 Info "4. Temporary working directories"
 $tmp = @(Get-ChildItem $env:TEMP -Directory -ErrorAction SilentlyContinue |
-         Where-Object { $_.Name -match '^(bondtest|fastdl-test|splittest|tmtest|ml-check|ml-def|ml-restore|ipcheck|docverify|ispack|mlxfer)$' })
+         Where-Object { $_.Name -match '^(bondtest|fastdl-test|splittest|tmtest|ml-check|ml-def|ml-restore|ml-it|ml-shot-profile|ipcheck|docverify|ispack|mlxfer)$' })
 if ($tmp.Count -eq 0) {
   Good "   None left."
 } elseif ($Apply) {
@@ -143,19 +143,38 @@ if ($tmp.Count -eq 0) {
 }
 Say ""
 
-# ------------------------------------------------------------------ 5. tools
-Info "5. Tools and scripts"
+# ------------------------------------------------------- 5. console leftovers
+# The console's per-app monitor runs an ETW session; it is stopped when the
+# console exits, but a crash can leave it running.
+Info "5. Console leftovers"
+$etw = (& logman query MultilinkNetMon -ets 2>&1 | Out-String) -notmatch 'not found|cannot find'
+if (-not $etw) {
+  Good "   No monitor session left running."
+} elseif ($Apply) {
+  & logman stop MultilinkNetMon -ets 2>&1 | Out-Null
+  Good "   stopped leftover monitor session MultilinkNetMon"
+} else {
+  Warn "   would stop leftover monitor session MultilinkNetMon"
+}
+Say ""
+
+# ------------------------------------------------------------------ 6. tools
+Info "6. Tools and scripts"
 $aria = "$env:LOCALAPPDATA\Microsoft\WinGet\Links\aria2c.exe"
-$files = @("$env:USERPROFILE\multilink.ps1", "$env:USERPROFILE\fastdl.ps1")
+$files = @("$env:USERPROFILE\multilink.ps1", "$env:USERPROFILE\fastdl.ps1",
+           (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Multilink.lnk'))
+$settingsDir = Join-Path $env:LOCALAPPDATA 'multilink'
 $ariaThere = Test-Path $aria
 $filesThere = @($files | Where-Object { Test-Path $_ })
 "   aria2 installed : $(if ($ariaThere) {'yes'} else {'no'})" | Say
-"   loose scripts in your home folder: $($filesThere.Count)" | Say
+"   loose scripts / desktop shortcut: $($filesThere.Count)" | Say
+"   console settings folder: $(if (Test-Path $settingsDir) {'yes'} else {'no'})" | Say
 Dim  "   (the Desktop 'internet speed' folder is left alone - delete it yourself if you want)"
 if (-not $RemoveTools) {
   Dim "   Add -RemoveTools to uninstall aria2 and delete the loose home-folder scripts."
 } elseif ($Apply) {
   foreach ($f in $filesThere) { Remove-Item $f -Force -ErrorAction SilentlyContinue; Good "   deleted $f" }
+  if (Test-Path $settingsDir) { Remove-Item $settingsDir -Recurse -Force -ErrorAction SilentlyContinue; Good "   deleted $settingsDir" }
   if ($ariaThere) {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
       Info "   uninstalling aria2..."
@@ -164,12 +183,12 @@ if (-not $RemoveTools) {
     } else { Warn "   winget unavailable - remove aria2 manually" }
   }
 } else {
-  Warn "   would delete $($filesThere.Count) script(s) and uninstall aria2"
+  Warn "   would delete $($filesThere.Count) file(s), the console settings folder, and uninstall aria2"
 }
 Say ""
 
-# ------------------------------------------------------------------ 6. manual
-Info "6. Things only you can undo"
+# ------------------------------------------------------------------ 7. manual
+Info "7. Things only you can undo"
 Say  "   * Metered connection flag:  Settings > Network & Internet > <adapter> >"
 Say  "     Metered connection.  No reliable cmdlet exists for this."
 Say  "   * Your phone's Wi-Fi / USB tethering toggles live on the phone."

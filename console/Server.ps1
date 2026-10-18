@@ -12,6 +12,7 @@ $script:ConsoleDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Jobs.ps1')
 . (Join-Path $PSScriptRoot 'Watch.ps1')
 . (Join-Path $PSScriptRoot 'Downloads.ps1')
+. (Join-Path $PSScriptRoot 'Network.ps1')
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'multilink.ps1')
 
 # "METHOD /path" -> scriptblock { param($ctx, $state, $body, $m) }
@@ -158,6 +159,15 @@ Register-Route 'POST' '/api/downloads' { param($ctx, $state, $body) Start-Downlo
 Register-Route 'POST' '/api/downloads/(?<id>[0-9a-f]{12})/cancel' {
   param($ctx, $state, $body, $m)
   Stop-Download $state $m.id
+}
+Register-Route 'POST' '/api/prefer' { param($ctx, $state, $body) Invoke-PreferApi $state "$($body.alias)" ([bool]$state.IsAdmin) }
+Register-Route 'POST' '/api/undo'   { param($ctx, $state) Invoke-UndoApi $state ([bool]$state.IsAdmin) }
+Register-Route 'POST' '/api/reset' {
+  param($ctx, $state, $body)
+  $apply = [bool]$body.apply
+  if ($apply -and -not $state.IsAdmin) { return New-ApiError 409 'Restart the console as administrator' }
+  if ($apply) { @{ jobId = (Start-ConsoleJob $state 'reset' { param($state, $emit) Invoke-ResetJob $state $emit $true }) } }
+  else { @{ jobId = (Start-ConsoleJob $state 'reset' { param($state, $emit) Invoke-ResetJob $state $emit $false }) } }
 }
 Register-Route 'POST' '/api/stop'  { param($ctx, $state) $state.Stopping = $true; @{} }
 

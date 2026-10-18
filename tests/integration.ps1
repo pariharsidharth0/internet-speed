@@ -125,6 +125,19 @@ try {
     Remove-Item $dlDir -Recurse -Force -ErrorAction SilentlyContinue
   }
 
+  # --- Task 7: admin actions (the test console is not elevated) -------------
+  Check 'prefer without admin -> 409' {
+    $r = Http -Method POST -Path '/api/prefer' -Body @{ alias = 'Ethernet' }
+    $r.Status -eq 409 -and $r.Json.error -eq 'Restart the console as administrator'
+  }
+  Check 'reset apply without admin -> 409' { (Http -Method POST -Path '/api/reset' -Body @{ apply = $true }).Status -eq 409 }
+  Check 'reset preview streams the report' {
+    $id = (Http -Method POST -Path '/api/reset' -Body @{ apply = $false }).Json.jobId
+    $deadline = (Get-Date).AddSeconds(60)
+    do { Start-Sleep 1; $j = (Http -Path "/api/jobs/$id").Json } while ($j.state -eq 'running' -and (Get-Date) -lt $deadline)
+    $j.state -eq 'done' -and @($j.log | Where-Object { $_.text -like '*Interface metrics*' }).Count -ge 1
+  }
+
   # --- later tasks append checks here --------------------------------------
 
   Check 'stop -> process exits' {
