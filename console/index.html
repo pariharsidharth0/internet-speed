@@ -1,4 +1,835 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Multilink Console</title>
 <meta name="ml-token" content="{{TOKEN}}">
+<style>
+/* Layout: instrument panel. Summary strip -> live graph -> link cards -> apps -> output | actions rail. */
+:root {
+  --ground:   #eef1f4;
+  --panel:    #fbfcfd;
+  --ink:      #131a22;
+  --ink-2:    #4a5663;
+  --ink-3:    #6f7b88;
+  --rule:     #d7dde3;
+  --wired:    #2a78d6;
+  --tether:   #eb6834;
+  --link3:    #1baf7a;
+  --link4:    #eda100;
+  --good:     #1a8a4a;
+  --warn:     #a86a00;
+  --bad:      #c93a3a;
+  --btn:      #131a22;
+  --btn-ink:  #f4f7fa;
+  --field:    #ffffff;
+  --console:  #18202a;
+  --console-ink: #cfd8e1;
+  --font-body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-data: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ground: #0e1318; --panel: #161d24; --ink: #e8edf2; --ink-2: #a9b4bf; --ink-3: #808c98;
+    --rule: #26313b; --wired: #3987e5; --tether: #d95926; --link3: #199e70; --link4: #c98500;
+    --good: #3fb871; --warn: #e0a028; --bad: #ef6b6b;
+    --btn: #e8edf2; --btn-ink: #0e1318; --field: #0f151b; --console: #0a0e12; --console-ink: #c3ced8;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--ground); color: var(--ink);
+  font: 15px/1.5 var(--font-body);
+  padding: 20px 16px 40px;
+}
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 16px; }
+.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+.label { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+h1, h2 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+h2 { font-size: 17px; font-weight: 600; }
+[hidden] { display: none !important; }
+
+/* header */
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+header h1 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+header h1 span { color: var(--ink-3); font-weight: 500; }
+.pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; border: 1px solid var(--rule); background: var(--panel); color: var(--ink-2); }
+.pill i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.good { color: var(--good); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--bad); }
+.local { font-size: 12.5px; color: var(--ink-3); font-family: var(--font-data); }
+.head-right { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* banners */
+.banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 16px; border-radius: 10px;
+  border: 1px solid var(--bad); background: color-mix(in srgb, var(--bad) 9%, var(--panel)); }
+.banner.warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--panel)); }
+.banner b { color: var(--bad); } .banner.warn b { color: var(--warn); }
+.banner p { margin: 0; flex: 1 1 320px; font-size: 14px; color: var(--ink-2); }
+.banner .inline { display: flex; gap: 6px; align-items: center; }
+.banner input { width: 80px; }
+
+/* summary strip */
+.strip { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1.3fr; background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; }
+.strip > div { padding: 16px 20px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.strip > div + div { border-left: 1px solid var(--rule); }
+.big { font-family: var(--font-data); font-size: 44px; font-weight: 700; line-height: 1.05; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.big small { font-size: 16px; font-weight: 500; color: var(--ink-2); letter-spacing: 0; margin-left: 4px; }
+.mid { font-family: var(--font-data); font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.mid small { font-size: 13px; color: var(--ink-2); font-weight: 400; margin-left: 3px; }
+.mid.text { font-family: var(--font-display); font-size: 20px; }
+.sub { font-size: 13px; color: var(--ink-2); }
+.key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.meter { height: 6px; border-radius: 3px; background: var(--rule); overflow: hidden; margin-top: 8px; }
+.meter b { display: block; height: 100%; width: 0; background: var(--tether); transition: width .4s; }
+.meter b.hit { background: var(--bad); }
+.data-warn { color: var(--warn); font-weight: 600; }
+.mini-row { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); margin-top: 6px; flex-wrap: wrap; }
+.mini-row input { width: 64px; padding: 3px 6px; }
+.mini-row select { width: auto; padding: 3px 6px; font-size: 13px; }
+
+/* main grid */
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+.col { display: grid; gap: 16px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; min-width: 0; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 10px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink-2); margin-left: auto; }
+
+/* chart */
+.chart-box { position: relative; }
+#chart { width: 100%; height: 280px; display: block; }
+#chart text { font-family: var(--font-data); font-size: 11px; fill: var(--ink-3); }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+  padding: 8px 11px; font-size: 13px; box-shadow: 0 6px 20px rgb(0 0 0 / .12); min-width: 160px; }
+.tip div { display: flex; justify-content: space-between; gap: 14px; }
+.tip .t { color: var(--ink-3); font-size: 12px; margin-bottom: 3px; }
+.empty { color: var(--ink-3); font-size: 14px; padding: 8px 0; }
+
+/* link cards */
+.links { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.link { border-top: 3px solid var(--wired); }
+.link-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.chip { font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.chip.good { color: var(--good); } .chip.bad { color: var(--bad); } .chip.muted { color: var(--ink-3); } .chip.warn { color: var(--warn); }
+dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 14px; }
+dt { color: var(--ink-3); }
+dd { margin: 0; text-align: right; font-family: var(--font-data); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.lat { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.lat div { display: grid; }
+.lat .v { font-family: var(--font-data); font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lat .v.good { color: var(--good); } .lat .v.bad { color: var(--bad); }
+.lat-note { grid-column: 1 / -1; font-size: 12px; color: var(--ink-3); }
+
+/* apps */
+.apps-scroll { overflow-x: auto; }
+.apps { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 560px; }
+.apps th { text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); padding: 0 8px 8px; border-bottom: 1px solid var(--rule); }
+.apps td { padding: 9px 8px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+.apps tr:last-child td { border-bottom: 0; }
+.apps .r { text-align: right; font-family: var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.apps .name b { font-weight: 600; }
+.apps .name span.exe { display: block; font-size: 12px; color: var(--ink-3); font-family: var(--font-data); }
+.apps .proto { font-size: 11px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--rule); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+.share { display: flex; gap: 2px; height: 8px; width: 140px; border-radius: 3px; overflow: hidden; background: var(--rule); }
+.share i { height: 100%; }
+.via { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+.flag { color: var(--warn); font-weight: 600; }
+.mode-note { font-size: 12.5px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+/* actions */
+.actions { display: grid; gap: 18px; }
+.actions section { display: grid; gap: 10px; }
+.actions section + section { padding-top: 16px; border-top: 1px solid var(--rule); }
+.actions p { margin: 0; font-size: 13px; color: var(--ink-2); }
+button { font: inherit; cursor: pointer; border-radius: 8px; padding: 10px 14px; font-weight: 600; font-size: 14px;
+  border: 1px solid var(--btn); background: var(--btn); color: var(--btn-ink); transition: transform .08s, opacity .15s; }
+button:hover { opacity: .88; }
+button:active { transform: translateY(1px); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+button.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+button.ghost:hover { border-color: var(--ink-3); opacity: 1; }
+button.small { padding: 5px 10px; font-size: 12.5px; }
+button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+button.linkbtn { background: none; border: 0; padding: 0; color: var(--wired); font-weight: 600; font-size: 13px; text-decoration: underline; text-underline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--wired); outline-offset: 2px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row > * { flex: 1 1 auto; }
+input, select { font: inherit; font-size: 14px; width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--rule);
+  background: var(--field); color: var(--ink); }
+input.mono { font-family: var(--font-data); font-size: 13px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 8px; padding: 3px; gap: 3px; }
+.seg button { background: transparent; color: var(--ink-2); border: 0; padding: 7px; font-size: 13px; }
+.seg button[aria-pressed="true"] { background: var(--btn); color: var(--btn-ink); }
+.admin { font-size: 11px; font-weight: 600; color: var(--warn); margin-left: 6px; letter-spacing: .04em; }
+.range { font-size: 13px; margin: -2px 0 0; }
+.range.good { color: var(--good); } .range.warn { color: var(--warn); } .range.dim { color: var(--ink-3); }
+.err { font-size: 13px; color: var(--bad); margin: 0; }
+
+/* download job */
+.job { display: grid; gap: 8px; }
+.job-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 14px; }
+.job-head b { font-family: var(--font-data); font-weight: 500; overflow-wrap: anywhere; }
+.bar { height: 14px; border-radius: 4px; background: var(--rule); display: flex; gap: 2px; overflow: hidden; }
+.bar span { height: 100%; transition: width .5s linear; }
+.job-stats { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; color: var(--ink-2); }
+.finished { display: grid; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+.finished div { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid var(--rule); padding-top: 6px; }
+.finished b { font-family: var(--font-data); font-weight: 500; overflow-wrap: anywhere; color: var(--ink); }
+
+/* console */
+.console { background: var(--console); color: var(--console-ink); border-radius: 10px; padding: 14px 18px;
+  font: 12.5px/1.6 var(--font-data); height: 240px; overflow: auto; white-space: pre-wrap; }
+.console .info { color: #6fb3ff; } .console .good { color: #5fd38d; } .console .warn { color: #f2c14e; }
+.console .bad { color: #ff7b7b; } .console .dim, .console .cmd { color: #8896a4; }
+
+/* stopped */
+.stopped { position: fixed; inset: 0; background: color-mix(in srgb, var(--ground) 88%, transparent); display: grid; place-items: center; padding: 16px; z-index: 20; }
+.stopped div { background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; padding: 24px 28px; max-width: 460px; font-size: 16px; }
+
+@media (max-width: 980px) {
+  .main { grid-template-columns: 1fr; }
+  .strip { grid-template-columns: 1fr 1fr; }
+  .strip > div:nth-child(3) { border-left: 0; }
+  .strip > div:nth-child(n+3) { border-top: 1px solid var(--rule); }
+}
+@media (max-width: 520px) {
+  .strip { grid-template-columns: 1fr; }
+  .strip > div + div { border-left: 0; border-top: 1px solid var(--rule); }
+  .big { font-size: 36px; }
+  .head-right { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>multilink <span>console</span></h1>
+    <span class="pill" id="sepPill"><i></i><span id="sepText">Checking links…</span></span>
+    <span class="local" id="localLabel">local only</span>
+    <div class="head-right">
+      <span class="chip muted" id="adminChip">…</span>
+      <button class="ghost small" id="btnStopConsole">Stop console</button>
+    </div>
+  </header>
+
+  <div class="banner" id="lostBanner" hidden role="alert">
+    <b>Speed boost lost</b>
+    <p id="lostText">Both links report the same public IP, so the phone is on Wi-Fi and its traffic goes through your home router. Turn the phone's Wi-Fi off and leave mobile data on.</p>
+    <button id="btnRecheck">Re-check now</button>
+  </div>
+
+  <div class="banner warn" id="capBanner" hidden role="alert">
+    <b>Mobile data cap reached</b>
+    <p id="capText">Downloads now use the wired link only. 5G-only downloads are paused until you raise the cap.</p>
+    <div class="inline"><label for="capRaise" class="sub">New cap</label><input id="capRaise" type="number" min="1" step="1"><span class="sub">GB</span><button class="small" id="btnRaiseCap">Raise cap</button></div>
+  </div>
+
+  <div class="strip">
+    <div>
+      <span class="label">Combined throughput</span>
+      <span class="big" id="total">0<small>Mbps</small></span>
+      <span class="sub" id="split">waiting for the first sample…</span>
+    </div>
+    <div>
+      <span class="label">Speed-up vs wired alone</span>
+      <span class="mid" id="gain">—</span>
+      <span class="sub" id="baseSub">Measure wired first</span>
+      <span><button class="linkbtn" id="btnBase">Measure wired (10 s)</button></span>
+    </div>
+    <div>
+      <span class="label">Ordinary traffic uses</span>
+      <span class="mid text" id="defRoute">—</span>
+      <span class="sub" id="defSub">automatic metric</span>
+    </div>
+    <div>
+      <span class="label">Mobile data this session</span>
+      <span class="mid" id="mobile">0.00<small>GB</small></span>
+      <span class="sub" id="mobileRate">no mobile link found</span>
+      <div class="meter"><b id="mobileMeter"></b></div>
+      <div class="mini-row"><label for="cap">Switch to wired-only at</label><input id="cap" type="number" min="1" step="1" value="10"><span>GB</span></div>
+      <div class="mini-row"><label for="mobileSel">Mobile link</label><select id="mobileSel"><option value="">Auto</option></select></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="col">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Live throughput</h2>
+          <span class="label">last 60 s · stacked</span>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="chart-box" id="chartBox">
+          <svg id="chart" role="img" aria-label="Stacked area chart of download speed per link over the last 60 seconds"></svg>
+          <div class="tip" id="tip" hidden></div>
+        </div>
+      </div>
+
+      <div class="links" id="links"></div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Apps using the network</h2>
+          <span class="label">live · sorted by download speed</span>
+          <span class="mode-note" id="appsMode"></span>
+        </div>
+        <div class="apps-scroll">
+          <table class="apps">
+            <thead><tr><th>App</th><th>Which link</th><th class="r">Down</th><th class="r">Up</th><th class="r">Conns</th></tr></thead>
+            <tbody id="appRows"><tr><td colspan="5" class="empty">Starting the app monitor…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Output</h2><span class="label">what the engine reports</span>
+          <button class="ghost small" id="clearLog" style="margin-left:auto">Clear</button></div>
+        <div class="console" id="log" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <aside class="panel actions" aria-label="Actions">
+      <section>
+        <h2>Check connections</h2>
+        <p>Finds your links, confirms they have different public IPs, and measures ping and background traffic.</p>
+        <button id="btnCheck">Run check</button>
+      </section>
+
+      <section>
+        <h2>Download a file</h2>
+        <label class="label" for="url">Download link</label>
+        <input id="url" class="mono" placeholder="https://…" spellcheck="false" autocomplete="off">
+        <p class="range dim" id="rangeInfo" aria-live="polite">Paste a link to check whether it will split across links.</p>
+        <div class="seg" role="group" aria-label="Which links to use">
+          <button id="modeAll" aria-pressed="true">All links</button>
+          <button id="modeOne" aria-pressed="false">One link</button>
+        </div>
+        <select id="onePick" hidden aria-label="Link to use"></select>
+        <label class="label" for="outdir">Save to</label>
+        <input id="outdir" class="mono" spellcheck="false">
+        <div class="row">
+          <button id="btnGet">Start download</button>
+          <button class="ghost" id="btnStop" disabled>Cancel</button>
+        </div>
+        <p class="err" id="dlErr" hidden></p>
+        <div class="job" id="job" hidden>
+          <div class="job-head"><b id="jobName"></b><span class="num" id="jobPct">0%</span></div>
+          <div class="bar" id="jobBar"></div>
+          <div class="job-stats">
+            <span class="num" id="jobDone"></span>
+            <span class="num" id="jobEta"></span>
+            <span id="jobShare"></span>
+          </div>
+          <p class="sub" id="jobMsg" hidden></p>
+          <button class="ghost small" id="btnResume" hidden>Resume</button>
+        </div>
+        <div class="finished" id="finished"></div>
+      </section>
+
+      <section>
+        <h2>Fix game lag <span class="admin">ADMIN</span></h2>
+        <p>Sends browsing and games down your lowest-latency link. Downloads keep using both.</p>
+        <select id="preferSel" aria-label="Link for games and browsing"></select>
+        <div class="row">
+          <button id="btnPrefer">Prefer link</button>
+          <button class="ghost" id="btnUndo">Undo</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Reset network <span class="admin">ADMIN</span></h2>
+        <p>Shows what would be put back to Windows defaults. Nothing changes until you press Apply.</p>
+        <div class="row">
+          <button class="ghost" id="btnResetPreview">Preview reset</button>
+          <button class="danger" id="btnResetApply" hidden>Apply reset</button>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<div class="stopped" id="stopped" hidden role="alert"><div>The console has stopped. Double-click <b>multilink.bat</b> to start it again.</div></div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const TOKEN = document.querySelector('meta[name="ml-token"]').content;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  let state = null, series = [], downloads = { current: null, finished: [] }, apps = null;
+  let failures = 0, stopped = false;
+  const ui = { mode: 'all', resetPreviewed: false, lastDl: null };
+
+  // ---- api ---------------------------------------------------------------
+  async function api(method, path, body) {
+    const opt = { method, headers: { 'X-Multilink-Token': TOKEN } };
+    if (method !== 'GET') { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body || {}); }
+    const r = await fetch(path, opt);
+    let j = null; try { j = await r.json(); } catch (e) { }
+    if (!r.ok) { const e = new Error((j && j.error) || ('HTTP ' + r.status)); e.status = r.status; throw e; }
+    return j;
+  }
+
+  // ---- output log --------------------------------------------------------
+  const logEl = $('log');
+  function log(text, level) {
+    const line = document.createElement('div');
+    line.className = level || 'info';
+    line.textContent = (level === 'cmd' ? '> ' : '') + text;
+    const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
+    logEl.append(line);
+    if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+  }
+  $('clearLog').onclick = () => logEl.replaceChildren();
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  async function pollJob(id) {
+    let seen = 0;
+    for (;;) {
+      const j = await api('GET', '/api/jobs/' + id);
+      const lines = j.log || [];
+      for (; seen < lines.length; seen++) log(lines[seen].text, lines[seen].level);
+      if (j.state !== 'running') return j;
+      await wait(500);
+    }
+  }
+
+  async function runJob(btn, busyText, path, body) {
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = busyText;
+    try { const r = await api('POST', path, body); return await pollJob(r.jobId); }
+    catch (e) { log(e.message, 'bad'); return null; }
+    finally { btn.disabled = false; btn.textContent = label; }
+  }
+
+  // ---- links: order + colour ----------------------------------------------
+  // Wired links first (bottom of the stack), the mobile link on top.
+  function linkOrder() {
+    if (!state) return [];
+    const ps = state.paths.slice();
+    ps.sort((a, b) => (a.isMobile - b.isMobile));
+    return ps;
+  }
+  function linkColor(alias) {
+    const ps = linkOrder();
+    const p = ps.find(x => x.alias === alias);
+    if (p && p.isMobile) return css('--tether');
+    const wired = ps.filter(x => !x.isMobile).map(x => x.alias);
+    const i = wired.indexOf(alias);
+    return [css('--wired'), css('--link3'), css('--link4')][Math.max(0, i) % 3];
+  }
+  const keyHtml = alias => `<span class="key" style="background:${linkColor(alias)}"></span>`;
+  const shortName = p => p.isMobile ? (p.alias + ' (5G)') : p.alias;
+
+  // ---- chart -------------------------------------------------------------
+  const svg = $('chart'), NS = 'http://www.w3.org/2000/svg', N = 60;
+  const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+  let geom = null, hoverIdx = null;
+  // Four gridlines on round values: the step is 1, 2, 2.5 or 5 × 10^k.
+  function niceMax(v) {
+    const raw = Math.max(v * 1.1, 10) / 4;
+    const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map(f => f * pow).find(st => st >= raw);
+    return step * 4;
+  }
+  function draw() {
+    const W = svg.clientWidth, H = svg.clientHeight;
+    if (!W || !H) return;
+    const m = { l: 44, r: 12, t: 10, b: 24 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const order = linkOrder().map(p => p.alias);
+    const off = N - series.length;  // samples are right-aligned: newest at "now"
+    const val = (s, a) => (s.links && s.links[a]) ? s.links[a].rx : 0;
+    const totals = series.map(s => order.reduce((sum, a) => sum + val(s, a), 0));
+    const ymax = niceMax(Math.max(0, ...totals));
+    const x = i => m.l + ((i + off) / (N - 1)) * iw;
+    const y = v => m.t + ih - (v / ymax) * ih;
+    geom = { x, m, iw, off };
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.replaceChildren();
+
+    for (let k = 0; k <= 4; k++) {
+      const v = ymax * k / 4, yy = y(v);
+      svg.append(el('line', { x1: m.l, x2: W - m.r, y1: yy, y2: yy, stroke: css('--rule'), 'stroke-width': 1 }));
+      const tx = el('text', { x: m.l - 8, y: yy + 4, 'text-anchor': 'end' }); tx.textContent = +v.toFixed(1); svg.append(tx);
+    }
+    [0, 15, 30, 45, 59].forEach(i => {
+      const tx = el('text', { x: m.l + (i / (N - 1)) * iw, y: H - 6, 'text-anchor': i === 0 ? 'start' : i === 59 ? 'end' : 'middle' });
+      tx.textContent = i === 59 ? 'now' : `-${59 - i}s`; svg.append(tx);
+    });
+    if (series.length < 2) return;
+
+    // Cumulative stacks, bottom to top.
+    let lower = series.map(() => 0);
+    const tops = [];
+    order.forEach(a => {
+      const upper = series.map((s, i) => lower[i] + val(s, a));
+      const top = upper.map((v, i) => `${x(i)},${y(v)}`).join(' L');
+      const bottom = lower.map((v, i) => `${x(i)},${y(v)}`).reverse().join(' L');
+      svg.append(el('path', { d: `M${top} L${bottom} Z`, fill: linkColor(a), 'fill-opacity': .3 }));
+      tops.push({ a, top, upper });
+      lower = upper;
+    });
+    // Surface gap then a 2px line on each stack edge.
+    // A link carrying nothing would draw its edge over the link below it.
+    const floor = Math.max(0.5, ymax * 0.01);
+    const carrying = tops.filter((t, k) => series.some(s => val(s, order[k]) > floor));
+    carrying.forEach(t => {
+      svg.append(el('path', { d: 'M' + t.top, fill: 'none', stroke: css('--panel'), 'stroke-width': 4 }));
+      svg.append(el('path', { d: 'M' + t.top, fill: 'none', stroke: linkColor(t.a), 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+    });
+    const li = series.length - 1;
+    carrying.forEach(t => svg.append(el('circle', { cx: x(li), cy: y(t.upper[li]), r: 4, fill: linkColor(t.a), stroke: css('--panel'), 'stroke-width': 2 })));
+
+    if (hoverIdx !== null && hoverIdx < series.length) {
+      const hx = x(hoverIdx);
+      svg.append(el('line', { x1: hx, x2: hx, y1: m.t, y2: m.t + ih, stroke: css('--ink-3'), 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
+      carrying.forEach(t => svg.append(el('circle', { cx: hx, cy: y(t.upper[hoverIdx]), r: 4, fill: linkColor(t.a), stroke: css('--panel'), 'stroke-width': 2 })));
+      showTip(hoverIdx, order);
+    }
+  }
+  const tip = $('tip');
+  function showTip(i, order) {
+    const s = series[i], ago = series.length - 1 - i;
+    let total = 0;
+    const rows = order.map(a => { const v = (s.links[a] || { rx: 0 }).rx; total += v;
+      return `<div><span>${keyHtml(a)}${esc(a)}</span><span class="num">${v.toFixed(1)} Mbps</span></div>`; }).join('');
+    tip.innerHTML = `<div class="t">${ago === 0 ? 'now' : ago + ' s ago'}</div>${rows}
+      <div style="border-top:1px solid var(--rule);margin-top:4px;padding-top:4px"><b>Total</b><b class="num">${total.toFixed(1)} Mbps</b></div>`;
+    tip.hidden = false;
+    const px = geom.x(i), box = $('chartBox').clientWidth;
+    tip.style.left = (px + 180 > box ? px - 176 : px + 14) + 'px';
+    tip.style.top = '12px';
+  }
+  svg.addEventListener('pointermove', e => {
+    if (!geom || series.length < 2) return;
+    const r = svg.getBoundingClientRect();
+    const i = Math.round((e.clientX - r.left - geom.m.l) / geom.iw * (N - 1)) - geom.off;
+    hoverIdx = Math.max(0, Math.min(series.length - 1, i));
+    draw();
+  });
+  svg.addEventListener('pointerleave', () => { hoverIdx = null; tip.hidden = true; draw(); });
+
+  // ---- render: header, banners, strip ------------------------------------
+  const fmtMbps = v => v >= 100 ? v.toFixed(0) : v.toFixed(1);
+  function ago(iso) {
+    if (!iso) return '';
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    return s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+  }
+  function setOptions(sel, items, keepValue) {
+    const v = keepValue !== undefined ? keepValue : sel.value;
+    const html = items.map(([val, text]) => `<option value="${esc(val)}">${esc(text)}</option>`).join('');
+    if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+    if ([...sel.options].some(o => o.value === v)) sel.value = v;
+  }
+
+  function renderHeader() {
+    const s = state;
+    $('localLabel').textContent = `localhost:${s.port} · local only`;
+    const chip = $('adminChip');
+    chip.textContent = s.isAdmin ? 'Admin' : 'Not admin';
+    chip.className = 'chip ' + (s.isAdmin ? 'good' : 'warn');
+    chip.title = s.isAdmin ? '' : 'Restart the console as administrator for live per-app speeds, Prefer and Reset.';
+
+    const sep = s.separation, n = s.paths.length, pill = $('sepPill'), t = $('sepText');
+    const checked = sep.checkedAgoSec != null ? ` · checked ${sep.checkedAgoSec} s ago` : '';
+    const map = {
+      ok: ['good', `${n} paths · separate public IPs${checked}`],
+      lost: ['bad', 'Paths not separate · no speed-up'],
+      unverified: ['warn', `A link gave no public IP · unverified${checked}`],
+      single: ['warn', 'Only one internet path · plug in your phone'],
+      unknown: ['', n ? `${n} path(s) · checking public IPs…` : 'No internet path found'],
+    };
+    const [cls, text] = map[sep.status] || map.unknown;
+    pill.className = 'pill ' + cls; t.textContent = text;
+
+    $('lostBanner').hidden = sep.status !== 'lost';
+    const ips = s.paths.map(p => p.publicIp).filter(Boolean);
+    if (ips.length) $('lostText').textContent = `Both links report the same public IP (${ips[0]}), so the phone is on Wi-Fi and its traffic goes through your home router. Turn the phone's Wi-Fi off and leave mobile data on.`;
+
+    const cap = s.mobile;
+    $('capBanner').hidden = !cap.capHit;
+    if (cap.capHit && document.activeElement !== $('capRaise')) $('capRaise').value = Math.ceil(cap.sessionGB + 5);
+  }
+
+  function renderStrip() {
+    const s = state, last = series.length ? series[series.length - 1] : null;
+    const order = linkOrder();
+    let total = 0;
+    const parts = order.map(p => { const v = last && last.links[p.alias] ? last.links[p.alias].rx : 0; total += v;
+      return `${keyHtml(p.alias)}${esc(shortName(p))} ${fmtMbps(v)}`; });
+    $('total').innerHTML = `${fmtMbps(total)}<small>Mbps</small>`;
+    $('split').innerHTML = parts.length ? parts.join(' · ') : 'no internet path found';
+
+    if (s.baseline && s.baseline.mbps) {
+      $('gain').innerHTML = total > 20 ? `${(total / s.baseline.mbps).toFixed(1)}<small>×</small>` : '—';
+      $('baseSub').textContent = `wired alone: ${Math.round(s.baseline.mbps)} Mbps, measured ${ago(s.baseline.measuredAt)}`;
+      if (!$('btnBase').disabled) $('btnBase').textContent = 'Re-measure wired (10 s)';
+    } else {
+      $('gain').textContent = '—';
+      $('baseSub').textContent = 'Measure wired first';
+    }
+
+    $('defRoute').textContent = s.defaultRouteAlias || '—';
+    $('defSub').textContent = s.preferredAlias ? `pinned by you · metric 10` : 'automatic metric';
+
+    const mob = s.mobile;
+    $('mobile').innerHTML = `${mob.sessionGB.toFixed(2)}<small>GB</small>`;
+    const mr = $('mobileRate');
+    const mRate = mob.alias && last && last.links[mob.alias] ? last.links[mob.alias].rx : 0;
+    if (!mob.alias) { mr.textContent = 'no mobile link found'; mr.className = 'sub'; }
+    else if (mob.capHit) { mr.textContent = `cap of ${mob.capGB} GB reached · downloads now wired-only`; mr.className = 'sub data-warn'; }
+    else if (mRate > 20) { mr.textContent = `${(mRate / 8 / 1024 * 60).toFixed(1)} GB/min through the phone · cap ${mob.capGB} GB`; mr.className = 'sub data-warn'; }
+    else { mr.textContent = `${esc(mob.alias)} · cap ${mob.capGB} GB`; mr.className = 'sub'; }
+    const meter = $('mobileMeter');
+    meter.style.width = Math.min(100, mob.sessionGB / mob.capGB * 100) + '%';
+    meter.classList.toggle('hit', !!mob.capHit);
+    if (document.activeElement !== $('cap')) $('cap').value = mob.capGB;
+    setOptions($('mobileSel'), [['', 'Auto']].concat(s.paths.map(p => [p.alias, p.alias])));
+  }
+
+  // ---- render: link cards ------------------------------------------------
+  function renderLinks() {
+    const box = $('links'), s = state;
+    if (!s.paths.length) { box.innerHTML = '<div class="panel empty">No connection with its own internet gateway was found. Plug in the phone with USB tethering on.</div>'; return; }
+    box.innerHTML = linkOrder().map(p => {
+      const lat = p.latency;
+      let chip = '';
+      if (s.suggestedGamingLink === p.alias) chip = '<span class="chip good">Gaming link</span>';
+      else if (p.isMobile) chip = '<span class="chip muted">Bulk downloads</span>';
+      let latHtml;
+      if (!lat) latHtml = '<div class="lat-note">Measuring…</div>';
+      else if (lat.avgMs == null) latHtml = `<div class="lat-note">No ping replies (loss ${lat.lossPct}%) · measured ${ago(lat.measuredAt)}</div>`;
+      else {
+        const good = lat.avgMs < 60, jg = lat.jitterMs != null && lat.jitterMs < 10;
+        latHtml = `
+          <div><span class="label">Ping</span><span class="v ${good ? 'good' : lat.avgMs > 150 ? 'bad' : ''}">${lat.avgMs}<small> ms</small></span></div>
+          <div><span class="label">Jitter</span><span class="v ${lat.jitterMs == null ? '' : jg ? 'good' : lat.jitterMs > 30 ? 'bad' : ''}">${lat.jitterMs == null ? '—' : lat.jitterMs}<small>${lat.jitterMs == null ? '' : ' ms'}</small></span></div>
+          <div><span class="label">Loss</span><span class="v">${lat.lossPct}%</span></div>
+          <div class="lat-note">${lat.tcpOnly ? 'ICMP blocked · TCP connect time · ' : ''}measured ${ago(lat.measuredAt)}</div>`;
+      }
+      return `<div class="panel link" style="border-top-color:${linkColor(p.alias)}">
+        <div class="link-top"><h2>${esc(shortName(p))}</h2>${chip}</div>
+        <dl>
+          <dt>Local IP</dt><dd>${esc(p.ip)}</dd>
+          <dt>Gateway</dt><dd>${esc(p.gateway || '—')}</dd>
+          <dt>Public IP</dt><dd>${esc(p.publicIp || '—')}</dd>
+          <dt>Metric</dt><dd>${p.metric} (${p.autoMetric ? 'auto' : 'manual'})</dd>
+          <dt>Now</dt><dd>${fmtMbps(p.rxMbps)} Mbps down · ${fmtMbps(p.txMbps)} up</dd>
+        </dl>
+        <div class="lat">${latHtml}</div>
+      </div>`;
+    }).join('');
+    $('legend').innerHTML = linkOrder().map(p => `<span>${keyHtml(p.alias)}${esc(shortName(p))}</span>`).join('');
+  }
+
+  // ---- render: apps ------------------------------------------------------
+  const fmtRate = v => v == null ? '—' : v >= 10 ? `${v.toFixed(0)} Mbps` : v >= 1 ? `${v.toFixed(1)} Mbps` : `${Math.round(v * 1000)} kbps`;
+  function renderApps() {
+    if (!apps) return;
+    $('appsMode').innerHTML = apps.mode === 'etw'
+      ? '<span class="chip good">Admin</span> exact bytes, TCP + UDP'
+      : '<span class="chip warn">Connections only</span> Run as admin for live speeds per app';
+    const order = linkOrder();
+    const mobile = order.find(p => p.isMobile);
+    if (!apps.rows.length) { $('appRows').innerHTML = '<tr><td colspan="5" class="empty">No app is using the network right now.</td></tr>'; return; }
+    $('appRows').innerHTML = apps.rows.map(a => {
+      const per = a.perLink || {};
+      const known = Object.values(per).some(v => v != null);
+      const sum = known ? Object.values(per).reduce((x, v) => x + (v || 0), 0) : 0;
+      let bar, via;
+      if (known && sum > 0) {
+        bar = order.map(p => `<i style="width:${(per[p.alias] || 0) / sum * 100}%;background:${linkColor(p.alias)}"></i>`).join('');
+        const shares = order.filter(p => per[p.alias] > 0).map(p => ({ p, pct: per[p.alias] / sum * 100 }));
+        via = shares.length === 1 ? esc(shortName(shares[0].p)) : shares.map(x => `${x.pct.toFixed(0)}% ${esc(x.p.alias)}`).join(' · ');
+      } else {
+        const on = Object.keys(per);
+        bar = order.filter(p => on.includes(p.alias)).map(p => `<i style="width:${100 / Math.max(1, on.length)}%;background:${linkColor(p.alias)}"></i>`).join('');
+        via = on.length ? 'connections on ' + on.map(esc).join(', ') : '—';
+      }
+      if (a.laggy) via = `<span class="flag">${via} · laggy link</span>`;
+      return `<tr>
+        <td class="name"><b>${esc(a.name)}</b>${(a.protos || []).map(p => `<span class="proto">${esc(p)}</span>`).join('')}<span class="exe">${esc(a.exe)}</span></td>
+        <td><div class="share">${bar}</div><div class="via">${via}</div></td>
+        <td class="r">${fmtRate(a.downMbps)}</td>
+        <td class="r">${fmtRate(a.upMbps)}</td>
+        <td class="r">${a.conns}</td></tr>`;
+    }).join('');
+  }
+
+  // ---- render: actions ---------------------------------------------------
+  function renderActions() {
+    const s = state, order = linkOrder();
+    setOptions($('onePick'), order.map(p => [p.alias, p.isMobile ? `${p.alias} (5G, keeps wired free for games)` : `${p.alias} only (no mobile data)`]));
+    const suggested = s.suggestedGamingLink || (order.find(p => !p.isMobile) || order[0] || {}).alias;
+    const ps = $('preferSel');
+    const firstFill = !ps.dataset.html;
+    setOptions(ps, order.map(p => [p.alias, p.alias + (p.alias === s.suggestedGamingLink ? ' (lowest latency)' : '')]), firstFill ? suggested : undefined);
+    $('btnPrefer').textContent = 'Prefer ' + (ps.value || 'link');
+    if (!$('outdir').value && s.defaultDir) $('outdir').value = s.defaultDir;
+  }
+
+  const fmtBytes = b => b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(0) + ' MB';
+  const fmtTime = s => s < 60 ? `${Math.ceil(s)} s` : s < 3600 ? `${Math.floor(s / 60)} m ${Math.round(s % 60)} s` : `${Math.floor(s / 3600)} h ${Math.round(s % 3600 / 60)} m`;
+  function renderDownloads() {
+    const d = downloads.current;
+    $('job').hidden = !d;
+    const active = d && d.state === 'active';
+    $('btnGet').disabled = !!active;
+    $('btnStop').disabled = !active;
+    if (d) {
+      const pct = d.totalBytes ? d.completedBytes / d.totalBytes * 100 : 0;
+      $('jobName').textContent = d.filename || d.url;
+      $('jobPct').textContent = d.totalBytes ? pct.toFixed(1) + '%' : '';
+      const per = d.perLinkBytes, order = linkOrder();
+      let bar = '', share = '';
+      if (per) {
+        const sum = Object.values(per).reduce((a, b) => a + b, 0) || 1;
+        bar = order.map(p => `<span style="width:${pct * (per[p.alias] || 0) / sum}%;background:${linkColor(p.alias)}"></span>`).join('');
+        share = order.filter(p => per[p.alias]).map(p => `${keyHtml(p.alias)}<span class="num">${((per[p.alias] || 0) / sum * 100).toFixed(0)}%</span> ${esc(p.alias)}`).join(' &nbsp; ');
+      } else {
+        bar = `<span style="width:${pct}%;background:var(--ink-3)"></span>`;
+        share = 'per-link split needs admin';
+      }
+      $('jobBar').innerHTML = bar;
+      $('jobShare').innerHTML = share;
+      $('jobDone').textContent = d.totalBytes ? `${fmtBytes(d.completedBytes)} / ${fmtBytes(d.totalBytes)}` : fmtBytes(d.completedBytes || 0);
+      const left = d.totalBytes - d.completedBytes, bps = d.speedMbps * 1e6 / 8;
+      $('jobEta').textContent = active ? (bps > 1000 && d.totalBytes ? `${fmtMbps(d.speedMbps)} Mbps · ETA ${fmtTime(left / bps)}` : 'starting…')
+        : d.state === 'complete' ? 'done' : d.state;
+      const msg = d.message || (d.switchedByCap ? 'Switched to wired-only by the mobile data cap.' : d.stoppedByCap ? 'Paused by the mobile data cap. Raise the cap to resume.' : '');
+      $('jobMsg').hidden = !msg; $('jobMsg').textContent = msg;
+      $('btnResume').hidden = !(d.state === 'cancelled' || d.state === 'error');
+      if (ui.lastDl && ui.lastDl.id === d.id && ui.lastDl.state === 'active' && d.state !== 'active') {
+        if (d.state === 'complete') log(`Download complete: ${d.filename} saved to ${d.dir}`, 'good');
+        else if (d.state === 'error') log(`Download failed: ${d.message || 'aria2 reported an error'}`, 'bad');
+      }
+    }
+    ui.lastDl = d ? { id: d.id, state: d.state } : null;
+    $('finished').innerHTML = (downloads.finished || []).slice(-5).reverse().map(f =>
+      `<div><b>${esc(f.filename || f.url)}</b><span class="num">${f.totalBytes ? fmtBytes(f.totalBytes) : ''} · ${esc(f.state)}</span></div>`).join('');
+  }
+
+  // ---- polling -----------------------------------------------------------
+  async function tick() {
+    if (stopped) return;
+    try {
+      const [s, se] = await Promise.all([api('GET', '/api/state'), api('GET', '/api/series')]);
+      state = s; series = se.samples || [];
+      failures = 0;
+    } catch (e) {
+      if (++failures >= 3) { stopped = true; $('stopped').hidden = false; }
+      return;
+    }
+    try { downloads = await api('GET', '/api/downloads'); } catch (e) { }
+    renderHeader(); renderStrip(); renderLinks(); renderActions(); renderDownloads(); draw();
+  }
+  async function tickApps() {
+    if (stopped) return;
+    try { apps = await api('GET', '/api/apps'); renderApps(); } catch (e) { }
+  }
+
+  // ---- actions -----------------------------------------------------------
+  $('btnCheck').onclick = () => runJob($('btnCheck'), 'Checking…', '/api/check');
+  $('btnRecheck').onclick = () => runJob($('btnRecheck'), 'Checking…', '/api/recheck');
+  $('btnBase').onclick = () => runJob($('btnBase'), 'Measuring wired only…', '/api/baseline');
+  $('btnStopConsole').onclick = async () => {
+    try { await api('POST', '/api/stop'); } catch (e) { }
+    stopped = true; $('stopped').hidden = false;
+  };
+
+  async function saveSettings(body) {
+    try { state = await api('POST', '/api/settings', body); renderHeader(); renderStrip(); }
+    catch (e) { log(e.message, 'bad'); }
+  }
+  $('cap').addEventListener('change', e => saveSettings({ capGB: Number(e.target.value) }));
+  $('btnRaiseCap').onclick = () => saveSettings({ capGB: Number($('capRaise').value) });
+  $('mobileSel').addEventListener('change', e => saveSettings({ mobileAlias: e.target.value || null }));
+
+  // Range check runs 600 ms after the last keystroke.
+  let rangeTimer = null, rangeSeq = 0;
+  $('url').addEventListener('input', () => {
+    clearTimeout(rangeTimer);
+    const info = $('rangeInfo'), url = $('url').value.trim();
+    if (!url) { info.className = 'range dim'; info.textContent = 'Paste a link to check whether it will split across links.'; return; }
+    if (!/^https?:\/\//i.test(url)) { info.className = 'range warn'; info.textContent = 'Enter a link that starts with http:// or https://'; return; }
+    info.className = 'range dim'; info.textContent = 'Checking server…';
+    rangeTimer = setTimeout(async () => {
+      const seq = ++rangeSeq;
+      try {
+        const r = await api('POST', '/api/range', { url });
+        if (seq !== rangeSeq) return;
+        const size = r.sizeBytes ? ' · ' + fmtBytes(r.sizeBytes) : '';
+        if (r.splits) { info.className = 'range good'; info.textContent = `Splits across links${size} · server accepts range requests`; }
+        else { info.className = 'range warn'; info.textContent = r.reason || 'This server does not accept range requests, so it will download over one link.'; }
+      } catch (e) { if (seq === rangeSeq) { info.className = 'range warn'; info.textContent = e.message; } }
+    }, 600);
+  });
+
+  function setMode(m) {
+    ui.mode = m;
+    $('modeAll').setAttribute('aria-pressed', m === 'all');
+    $('modeOne').setAttribute('aria-pressed', m === 'one');
+    $('onePick').hidden = m !== 'one';
+  }
+  $('modeAll').onclick = () => setMode('all');
+  $('modeOne').onclick = () => setMode('one');
+
+  async function startDownload(req) {
+    const err = $('dlErr'); err.hidden = true;
+    try {
+      await api('POST', '/api/downloads', req);
+      log(req.mode === 'all' ? `Downloading over all links: ${req.url}` : `Downloading over ${req.link} only: ${req.url}`, 'cmd');
+      tick();
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+  }
+  $('btnGet').onclick = () => startDownload({
+    url: $('url').value.trim(), mode: ui.mode, link: ui.mode === 'one' ? $('onePick').value : null, dir: $('outdir').value.trim() });
+  $('btnResume').onclick = () => {
+    const d = downloads.current; if (!d) return;
+    startDownload({ url: d.url, mode: d.mode, link: d.link, dir: d.dir });
+  };
+  $('btnStop').onclick = async () => {
+    const d = downloads.current; if (!d) return;
+    try { await api('POST', `/api/downloads/${d.id}/cancel`); log('Download cancelled. Press Resume to continue where it stopped.', 'warn'); tick(); }
+    catch (e) { log(e.message, 'bad'); }
+  };
+
+  $('preferSel').addEventListener('change', () => { $('btnPrefer').textContent = 'Prefer ' + $('preferSel').value; });
+  async function simple(btn, path, body) {
+    btn.disabled = true;
+    try { const r = await api('POST', path, body); (r.log || []).forEach(l => log(l.text, l.level)); tick(); }
+    catch (e) { log(e.message, 'bad'); }
+    finally { btn.disabled = false; }
+  }
+  $('btnPrefer').onclick = () => simple($('btnPrefer'), '/api/prefer', { alias: $('preferSel').value });
+  $('btnUndo').onclick = () => simple($('btnUndo'), '/api/undo');
+  $('btnResetPreview').onclick = async () => {
+    const j = await runJob($('btnResetPreview'), 'Checking…', '/api/reset', { apply: false });
+    if (j && j.state === 'done') $('btnResetApply').hidden = false;
+  };
+  $('btnResetApply').onclick = async () => {
+    await runJob($('btnResetApply'), 'Resetting…', '/api/reset', { apply: true });
+    $('btnResetApply').hidden = true;
+  };
+
+  // ---- boot --------------------------------------------------------------
+  tick(); tickApps();
+  setInterval(tick, 1000);
+  setInterval(tickApps, 2000);
+  new ResizeObserver(() => draw()).observe(svg);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { renderLinks(); draw(); });
+})();
+</script>
+</body>
+</html>

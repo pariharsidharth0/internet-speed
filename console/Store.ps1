@@ -226,5 +226,6 @@ function Get-StateDto {
     mobile = @{ alias = $State.Mobile.Alias; sessionGB = (Get-SessionGB $State); capGB = $State.Settings.capGB; capHit = [bool]$State.CapHit }
     baseline = $baseline
     port = $State.Port
+    defaultDir = (Join-Path $env:USERPROFILE 'Downloads')
   }
 }
