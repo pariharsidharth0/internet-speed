@@ -9,6 +9,8 @@
 $script:ConsoleDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Http.ps1')
 . (Join-Path $PSScriptRoot 'Store.ps1')
+. (Join-Path $PSScriptRoot 'Jobs.ps1')
+. (Join-Path $PSScriptRoot 'Watch.ps1')
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'multilink.ps1')
 
 # "METHOD /path" -> scriptblock { param($ctx, $state, $body, $m) }
@@ -41,6 +43,22 @@ function Send-Page {
   Send-Bytes $Ctx ([Text.Encoding]::UTF8.GetBytes($html)) 'text/html; charset=utf-8'
 }
 
+# For handlers whose work can take seconds (network probes): the response is
+# written from a background runspace so the request loop keeps serving.
+function Start-DeferredResponse {
+  param($State, $Ctx, [scriptblock]$Work, [object[]]$Arguments = @())
+  Start-BackgroundRunspace $State 'deferred' {
+    param($ctx, $body, $a)
+    try {
+      $r = & ([scriptblock]::Create($body)) @a
+      if ($r -and $r.PSObject.TypeNames -contains 'Multilink.ApiResult') { Send-Json $ctx $r.Body $r.Status } else { Send-Json $ctx $r }
+    } catch { try { Send-Json $ctx @{ error = $_.Exception.Message } 500 } catch { } }
+  } -Arguments @($Ctx, $Work.ToString(), $Arguments) | Out-Null
+  $d = [pscustomobject]@{}
+  $d.PSObject.TypeNames.Insert(0, 'Multilink.Deferred')
+  $d
+}
+
 function Invoke-Request {
   param($Ctx, $State)
   $req = $Ctx.Request
@@ -68,6 +86,7 @@ function Invoke-Request {
   try {
     $body = if ($req.HttpMethod -eq 'POST') { Read-JsonBody $Ctx } else { @{} }
     $result = & $route.Handler $Ctx $State $body $route.Match
+    if ($result -and $result.PSObject.TypeNames -contains 'Multilink.Deferred') { return }
     if ($result -and $result.PSObject.TypeNames -contains 'Multilink.ApiResult') { Send-Json $Ctx $result.Body $result.Status }
     else { Send-Json $Ctx $result }
   } catch {
@@ -99,6 +118,36 @@ Register-Route 'POST' '/api/settings' {
   Save-Settings -Settings $state.Settings
   Get-StateDto $state
 }
+Register-Route 'GET' '/api/jobs/(?<id>[0-9a-f]{12})' {
+  param($ctx, $state, $body, $m)
+  $job = $state.Jobs[$m.id]
+  if (-not $job) { return New-ApiError 404 'No such job' }
+  Get-JobDto $job
+}
+Register-Route 'POST' '/api/check' {
+  param($ctx, $state)
+  @{ jobId = (Start-ConsoleJob $state 'check' { param($state, $emit) Invoke-CheckJob $state $emit }) }
+}
+Register-Route 'POST' '/api/recheck' {
+  param($ctx, $state)
+  @{ jobId = (Start-ConsoleJob $state 'recheck' {
+    param($state, $emit)
+    $results = Invoke-EgressCheck $state
+    foreach ($r in $results) { & $emit ("  {0,-14} -> {1}" -f $r.Alias, $(if ($r.PublicIp) { $r.PublicIp } else { '(no response)' })) 'info' }
+    foreach ($l in (Get-SeparationLines $state.Separation.status @($results).Count)) { & $emit $l.text $l.level }
+    @{ separation = $state.Separation.status }
+  }) }
+}
+Register-Route 'POST' '/api/baseline' {
+  param($ctx, $state)
+  @{ jobId = (Start-ConsoleJob $state 'baseline' { param($state, $emit) Invoke-Baseline $state $emit }) }
+}
+Register-Route 'POST' '/api/range' {
+  param($ctx, $state, $body)
+  $url = "$($body.url)".Trim()
+  if ($url -notmatch '^https?://') { return New-ApiError 400 'Enter a link that starts with http:// or https://' }
+  Start-DeferredResponse $state $ctx { param($u) Invoke-RangeProbe $u } @($url)
+}
 Register-Route 'POST' '/api/stop'  { param($ctx, $state) $state.Stopping = $true; @{} }
 
 # --- entry --------------------------------------------------------------------
@@ -119,6 +168,8 @@ function Start-MultilinkConsole {
   [IO.File]::WriteAllText((Join-Path $env:TEMP 'multilink-console.url'), $url)
   Write-ConsoleLine "Multilink console running at $url  (close this window to stop)"
   Start-Sampler $state
+  Start-Watcher $state
+  Start-ConsoleJob $state 'latency' { param($state, $emit) Invoke-LatencyPass $state $null } | Out-Null
   if (-not $NoBrowser) { Start-Process explorer.exe $url }
 
   try {

@@ -72,6 +72,14 @@ $work = [scriptblock]::Create($body)
 try { & $work @argsList }
 catch { [void]$state.Log.Add(@{ t = (Get-Date).ToString('o'); text = "background error: $($_.Exception.Message)"; level = 'bad' }) }
 '@
+  # Reap finished runspaces so long sessions don't accumulate them.
+  foreach ($old in @($State.Runspaces.ToArray())) {
+    if ($old.Handle.IsCompleted) {
+      try { $old.PowerShell.EndInvoke($old.Handle) | Out-Null } catch { }
+      $old.PowerShell.Runspace.Dispose(); $old.PowerShell.Dispose()
+      $State.Runspaces.Remove($old)
+    }
+  }
   $rs = [runspacefactory]::CreateRunspace()
   $rs.Name = $Name
   $rs.Open()

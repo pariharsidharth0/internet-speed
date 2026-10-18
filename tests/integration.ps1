@@ -72,6 +72,30 @@ try {
   }
   Check 'settings rejects cap 0' { (Http -Method POST -Path '/api/settings' -Body @{ capGB = 0 }).Status -eq 400 }
 
+  # --- Task 5: jobs, range ---------------------------------------------------
+  Check 'unknown job -> 404' { (Http -Path '/api/jobs/000000000000').Status -eq 404 }
+  Check 'range rejects a non-http link' { (Http -Method POST -Path '/api/range' -Body @{ url = 'ftp://x' }).Status -eq 400 }
+  if (-not $Quick) {
+    Check 'range: Ubuntu ISO splits' {
+      $r = (Http -Method POST -Path '/api/range' -Body @{ url = 'https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso' }).Json
+      $r.splits -eq $true -and $r.sizeBytes -gt 1e9 -and $r.filename -eq 'ubuntu-24.04.5.1-desktop-amd64.iso'
+    }
+    Check 'requests are served while a range probe runs' {
+      $sw = [Diagnostics.Stopwatch]::StartNew()
+      $job = Start-Job { param($b, $t) curl.exe -s -m 20 -X POST -H "X-Multilink-Token: $t" -H 'Content-Type: application/json' --data-binary '{"url":"https://10.255.255.1/x.iso"}' "$b/api/range" } -ArgumentList $script:base, $script:token
+      Start-Sleep -Milliseconds 800
+      $ok = (Http -Path '/api/state').Status -eq 200 -and $sw.Elapsed.TotalSeconds -lt 5
+      Receive-Job $job -Wait -AutoRemoveJob | Out-Null
+      $ok
+    }
+    Check 'check job completes with output' {
+      $id = (Http -Method POST -Path '/api/check' -Body @{}).Json.jobId
+      $deadline = (Get-Date).AddSeconds(150)
+      do { Start-Sleep 2; $j = (Http -Path "/api/jobs/$id").Json } while ($j.state -eq 'running' -and (Get-Date) -lt $deadline)
+      $j.state -eq 'done' -and (@($j.log | Where-Object { $_.text -like 'Public egress IP per path*' }).Count -eq 1)
+    }
+  }
+
   # --- later tasks append checks here --------------------------------------
 
   Check 'stop -> process exits' {
