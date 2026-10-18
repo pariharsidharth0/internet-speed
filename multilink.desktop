@@ -1,0 +1,10 @@
+[Desktop Entry]
+# Edit the Exec= path below to point at this folder, then copy this file to
+# ~/.local/share/applications/
+Type=Application
+Name=Multilink
+Comment=Use every internet connection at once for faster downloads
+Terminal=true
+Exec=bash -c 'cd "/path/to/internet speed" && ./multilink.sh'
+Icon=network-wired
+Categories=Network;

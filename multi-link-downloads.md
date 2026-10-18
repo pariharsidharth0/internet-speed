@@ -392,8 +392,8 @@ pattern, which is exactly why a wrong result can survive a sanity check.
    cloud sync. Verify the links are near zero before measuring.
 6. **Install aria2** and verify your test file is real and range-capable (§4.5).
 7. **Benchmark A / B / C with a matched connection count**, plus a control.
-8. **Use `fastdl.ps1`** for real downloads. It auto-detects paths each run, so a
-   tether's changing IP doesn't matter.
+8. **Use the console** (double-click `multilink.bat`) for real downloads. It
+   re-detects paths every few seconds, so a tether's changing IP doesn't matter.
 9. **Watch metered data.** See §8.
 
 ---
@@ -461,95 +461,65 @@ aria2c --multiple-interface=<IP1>,<IP2> -x16 -s16 <URL>           # both links
 #   -k1M   minimum split size                --stop=N  exit after N seconds
 #   --continue=true  resume                  --file-allocation=none  no preallocation
 
-# --- The wrapper -----------------------------------------------------------
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\fastdl.ps1" "<URL>"
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\fastdl.ps1" "<URL>" -ShowLinks
+# --- The console -----------------------------------------------------------
+# Double-click multilink.bat, or:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\multilink.ps1
 ```
 
 ---
 
-## 11. `fastdl.ps1`
+## 11. The Multilink console
 
-Shipped alongside this document. What it does:
+Everything in this guide is now behind one double-click: `multilink.bat` opens a
+local web page with buttons for every action and live numbers for both links.
+It replaced the earlier `fastdl.ps1` and the text menu.
 
-* Enumerates every interface that has an IPv4 address **and** its own default
-  gateway, excluding link-local `169.254.*` addresses.
-* Passes those source IPs to `aria2c --multiple-interface`, so slices of one file
-  are fetched over every available path at once.
-* Falls back to a normal single-path download when only one path exists.
-* `-ShowLinks` prints each path's public egress IP first, which is the §4.3 check
-  built in — the fastest way to catch a phone that's still on Wi-Fi.
+### What it does
 
-```powershell
-.\fastdl.ps1 "https://example.com/big.iso"
-.\fastdl.ps1 "https://example.com/big.iso" -OutDir "D:\Downloads" -Connections 24
-.\fastdl.ps1 "https://example.com/big.iso" -ShowLinks
-```
+- **Live throughput graph**, stacked per link, last 60 seconds.
+- **Check connections** (§4.2–4.4 in one click): paths, public IP per path,
+  which link ordinary traffic uses, background traffic, ping and jitter.
+- **Download over all links or one link**, with a "will this split?" check
+  before you start (§3: the server must accept range requests).
+- **Apps using the network**, with which link each one is on. A game that is
+  partly on the 5G link is flagged.
+- **Mobile data cap**: when the phone has carried N GB this session, downloads
+  switch to wired-only without losing progress. A download you put on 5G only is
+  paused instead, so a game on the cable is never disturbed.
+- **"Speed boost lost" alert**: each link's public IP is re-checked every
+  60 seconds; if they become identical (the phone joined Wi-Fi, §5), a red
+  banner says so.
+- **Fix game lag** / **Undo** (interface metrics, §7) and **Reset network**
+  (runs `reset-network.ps1`, preview first).
 
-Because it re-detects interfaces on every run, it keeps working after the tether
-gets a new IP address.
-
----
-
-## 12. One-click scripts (`multilink`)
-
-`fastdl.ps1` (§11) does one job: download over all paths. The `multilink` scripts
-are the full toolkit, menu-driven, for setting this up on a new machine.
-
-### Windows: `multilink.bat` + `multilink.ps1`
-
-Put both files in the same folder and **double-click `multilink.bat`**. It sets
-the execution policy for that one process only and opens a menu:
+### How it is built
 
 ```
-==== multilink ====
-  1) Check my connections (paths, egress IPs, contention, latency)
-  2) Download a file using ALL connections
-  3) Download using ONE connection (keeps the others free for gaming)
-  4) Prefer my low-latency link for normal traffic + games (admin)
-  5) Undo that (restore automatic metrics) (admin)
-  6) Quit
+multilink.bat --(UAC once)--> multilink.ps1 --> console/Server.ps1
+                                                  |-- HttpListener on http://localhost:8642/
+                                                  |-- sampler: per-link byte counters every 1 s
+                                                  |-- watcher: public IP per link every 60 s
+                                                  |-- app monitor: ETW Kernel-Network (admin)
+                                                  `-- one aria2c per download, driven over RPC
 ```
 
-Or non-interactively:
+- **Local only.** Requests from anything other than this PC are refused, and
+  every API call needs a random per-session token embedded in the page. Without
+  both, any website open in your browser could drive `localhost`.
+- **Admin is optional.** Without it the console still runs; per-app speeds fall
+  back to "which apps hold connections on which link", and Fix game lag / Reset
+  ask you to restart as administrator.
+- **Nothing outlives it.** Every aria2c is tied to the console
+  (`--stop-with-process` plus a kill-on-close Job Object), and the ETW session is
+  stopped on exit or swept on the next start.
+- **Settings** (cap, chosen mobile link, wired baseline) live in
+  `%LOCALAPPDATA%\multilink\settings.json`. `reset-network.ps1 -Apply -RemoveTools`
+  deletes them.
 
-```powershell
-.\multilink.ps1 -Action check
-.\multilink.ps1 -Action get  -Url "https://example.com/big.iso"
-.\multilink.ps1 -Action only -Url "https://example.com/big.iso" -Only "Ethernet 2"
-.\multilink.ps1 -Action optimise      # re-launches elevated on its own
-```
+## 12. Linux
 
-Option 1 runs every verification from §4 in one pass — paths, egress IPs,
-*which* path ordinary traffic is currently taking, contention, and per-path
-latency and jitter. Real output from this machine:
-
-```
-Internet paths detected:
-  Ethernet 2     10.209.14.212    gw 10.209.14.180    metric 25 (auto: Enabled)
-  Ethernet       192.168.29.78    gw 192.168.29.1     metric 25 (auto: Enabled)
-
-Public egress IP per path (the test that decides everything):
-  Ethernet 2     -> 157.48.71.40
-  Ethernet       -> 49.36.245.236
-2 paths with distinct egress IPs - aggregation will work.
-
-Path used by ordinary traffic (games, browsing) right now:
-  -> Ethernet 2  (egress 157.48.71.40)
-
-Background traffic (pause downloads before trusting any speed test):
-  Ethernet 2        75.9 MB/s =    607 Mbps
-  Ethernet          39.3 MB/s =    314 Mbps
-A link is already busy. Pause Steam / Windows Update / torrents first.
-
-Latency per path (games care about this, not bandwidth):
-  Ethernet 2     avg  523.2 ms | max   619 ms | jitter  90.8 ms | loss 0%
-  Ethernet       avg   11.5 ms | max    12 ms | jitter   1.3 ms | loss 33%
-```
-
-Two things that output makes obvious at a glance: ordinary traffic (and therefore
-games) was going out over the 5G tether at 523 ms, and both links were saturated
-by a background download. Option 4 fixes the first; pausing Steam fixes the second.
+The console is Windows-only (the per-app monitor uses Windows APIs). Linux keeps
+the terminal script, plus `multilink.desktop` to launch it from the app menu.
 
 ### Linux: `multilink.sh`
 
@@ -594,9 +564,9 @@ you need `sudo ./multilink.sh setup`. Re-run `check` afterwards to confirm.
 These rules are runtime-only and disappear on reboot. To persist them, re-run
 `sudo ./multilink.sh setup` at boot from a systemd unit or `rc.local`.
 
-### Bugs found while testing these (both now fixed)
+### Bugs found while testing these (all now fixed)
 
-Worth recording, because both failed *silently* rather than erroring:
+Worth recording, because each failed *silently* rather than erroring:
 
 * **`multilink.sh` reported "no default route found" when `iproute2` was simply
   missing.** A missing dependency masqueraded as a network problem. It now
@@ -606,3 +576,12 @@ Worth recording, because both failed *silently* rather than erroring:
   PowerShell will not bind pipeline input without `[Parameter(ValueFromPipeline=$true)]`
   **and** a `process { }` block, so `$m` was always `$null`. The control flow
   worked perfectly, which is what made it deceptive — only the output was empty.
+* **The live graph updated every 2.5 s instead of every second.** On this PC
+  `Get-NetAdapterStatistics` takes 4–5 s per call, and the phone's USB tether
+  driver (RNDIS) takes ~1.8 s to answer any stats query. The console reads
+  counters with `GetIfEntry2` on one thread per adapter, so the slow phone only
+  delays its own readings.
+* **Downloads sat at 0 bytes with the phone tethered but offline.** aria2 makes
+  its first request (file size, redirects) on the *first* interface in
+  `--multiple-interface`; with the dead tether first it waited 60 s. Wired links
+  now go first, and aria2 gets `--connect-timeout=10 --timeout=20`.

@@ -1,5 +1,5 @@
 <#
-  reset-network.ps1 - undo every network change the multilink tools can make,
+  reset-network.ps1 - undo every network change the multilink console can make,
                       and optionally remove the tools themselves.
 
   SAFE BY DEFAULT. Running it with no arguments only *reports*: it compares your
@@ -11,7 +11,7 @@
     .\reset-network.ps1 -Apply -RemoveTools  also uninstall aria2 + delete scripts
 
   WHAT IT REVERTS
-    * Interface metrics  -> back to AutomaticMetric Enabled (undoes menu option 4)
+    * Interface metrics  -> back to AutomaticMetric Enabled (undoes the console's Fix game lag)
     * NIC teams (LBFO)   -> removed if any exist
     * Temp working dirs  -> deleted
 
