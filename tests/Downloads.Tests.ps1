@@ -113,3 +113,14 @@ Describe 'Update-Cap' {
     $s.CapHit | Should Be $false
   }
 }
+
+Describe 'Select-OrphanAria2' {
+  It 'picks aria2 processes whose console is gone' {
+    $procs = @(
+      [pscustomobject]@{ ProcessId = 11; CommandLine = 'aria2c.exe -x16 --stop-with-process=500 --enable-rpc=true' },
+      [pscustomobject]@{ ProcessId = 12; CommandLine = 'aria2c.exe -x16 --stop-with-process=600 --enable-rpc=true' },
+      [pscustomobject]@{ ProcessId = 13; CommandLine = 'aria2c.exe -x4 somefile' })
+    $o = @(Select-OrphanAria2 -Processes $procs -AlivePids @(600))
+    ($o | ForEach-Object { $_.ProcessId }) -join ',' | Should Be '11'
+  }
+}

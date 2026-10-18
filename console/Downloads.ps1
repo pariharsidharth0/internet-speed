@@ -271,3 +271,21 @@ function Stop-AllDownloads {
     try { if (-not $dl.Process.WaitForExit(3000)) { $dl.Process.Kill() } } catch { }
   }
 }
+
+# aria2c processes started by a console that no longer exists (it crashed
+# before --stop-with-process noticed). Only ours carry that flag.
+function Select-OrphanAria2 {
+  param([object[]]$Processes, [int[]]$AlivePids)
+  @($Processes | Where-Object {
+    $_.CommandLine -match '--stop-with-process=(\d+)' -and $AlivePids -notcontains [int]$Matches[1]
+  })
+}
+
+function Stop-OrphanAria2 {
+  $procs = @(Get-CimInstance Win32_Process -Filter "Name='aria2c.exe'" -ErrorAction SilentlyContinue)
+  if (-not $procs.Count) { return }
+  $alive = @(Get-Process | ForEach-Object { $_.Id })
+  foreach ($o in (Select-OrphanAria2 -Processes $procs -AlivePids $alive)) {
+    Stop-Process -Id $o.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+}

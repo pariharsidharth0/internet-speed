@@ -154,5 +154,29 @@ try {
   if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
 }
 
+# --- Task 9: a console killed outright takes its aria2 with it (Job Object) ---
+if (-not $Quick) {
+  Remove-Item $urlFile -ErrorAction SilentlyContinue
+  $proc = Start-Process powershell.exe -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd)
+  try {
+    $deadline = (Get-Date).AddSeconds(20)
+    while (-not (Test-Path $urlFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+    $script:base = (Get-Content $urlFile -Raw).Trim().TrimEnd('/')
+    $script:token = [regex]::Match((Http -Path '/' -NoToken).Text, 'content="([0-9a-f]{64})"').Groups[1].Value
+    Start-Sleep -Seconds 4
+    $dlDir = Join-Path $env:TEMP 'ml-it'
+    $null = Http -Method POST -Path '/api/downloads' -Body @{ url = 'https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso'; mode = 'all'; dir = $dlDir }
+    Start-Sleep -Seconds 3
+    $ariaPid = (Get-CimInstance Win32_Process -Filter "Name='aria2c.exe'" | Where-Object { $_.CommandLine -like "*stop-with-process=$($proc.Id)*" }).ProcessId
+    Stop-Process -Id $proc.Id -Force
+    Start-Sleep -Seconds 3
+    Check 'killing the console kills its aria2' { $ariaPid -and -not (Get-Process -Id $ariaPid -ErrorAction SilentlyContinue) }
+  } finally {
+    if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
+    Remove-Item (Join-Path $env:TEMP 'ml-it') -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 if ($script:failed) { Write-Host "$script:failed check(s) failed" -ForegroundColor Red; exit 1 }
 Write-Host 'All integration checks passed' -ForegroundColor Green

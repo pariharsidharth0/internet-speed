@@ -20,8 +20,8 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('menu','check','get','only','optimise','undo')]
-  [string]$Action = 'menu',
+  [ValidateSet('console','menu','check','get','only','optimise','undo')]
+  [string]$Action = 'console',
   [string]$Url,
   [string]$Only,
   [string]$OutDir = "$env:USERPROFILE\Downloads",
@@ -408,10 +408,36 @@ function Show-Menu {
   }
 }
 
+# --- console ----------------------------------------------------------------
+function Start-ConsoleApp {
+  . (Join-Path $PSScriptRoot 'console\Server.ps1')
+  $Host.UI.RawUI.WindowTitle = 'Multilink console'
+  if (-not (Get-Aria)) { Read-Host 'aria2 is needed for downloads. Press Enter to close'; return }
+  $settings = Get-Settings
+  if (-not $settings.shortcutAsked) {
+    $answer = Read-Host 'Create a desktop shortcut for Multilink? [Y/n]'
+    if ($answer -notmatch '^[nN]') {
+      try {
+        $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Multilink.lnk'))
+        $lnk.TargetPath = Join-Path $PSScriptRoot 'multilink.bat'
+        $lnk.WorkingDirectory = $PSScriptRoot
+        $lnk.Description = 'Use every internet connection at once'
+        $lnk.Save()
+        Good 'Shortcut created on your desktop.'
+      } catch { Warn "Couldn't create the shortcut: $($_.Exception.Message)" }
+    }
+    $settings.shortcutAsked = $true
+    Save-Settings -Settings $settings
+  }
+  Start-MultilinkConsole -Root $PSScriptRoot
+}
+
 # Dot-sourcing (". .\multilink.ps1") only defines the functions.
 if ($MyInvocation.InvocationName -eq '.') { return }
 
 switch ($Action) {
+  'console'  { Start-ConsoleApp }
+  'menu'     { Show-Menu }
   'check'    { Invoke-Check }
   'get'      { Invoke-Get  -U $Url -Dir $OutDir -Conn $Connections }
   'only'     { Invoke-Only -U $Url -Want $Only -Dir $OutDir -Conn $Connections }

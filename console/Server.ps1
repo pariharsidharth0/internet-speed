@@ -177,6 +177,11 @@ Register-Route 'POST' '/api/stop'  { param($ctx, $state) $state.Stopping = $true
 function Start-MultilinkConsole {
   param([string]$Root = (Split-Path -Parent $PSScriptRoot), [switch]$NoBrowser, [int]$Port = 0)
 
+  # Leftovers from a console that crashed: a kernel ETW session, orphan aria2.
+  try { [Multilink.NetMonitor]::StopStale() } catch { }
+  Stop-OrphanAria2
+  [Multilink.ConsoleClose]::Register()
+
   $state = New-ConsoleState
   $state.Root = $Root
   $state.IsAdmin = Test-Admin
@@ -202,7 +207,10 @@ function Start-MultilinkConsole {
       $iar = $listener.BeginGetContext($null, $null)
       # Wake every 250 ms so a stop request or close handler is never stuck
       # behind a blocking GetContext.
-      while (-not $iar.AsyncWaitHandle.WaitOne(250)) { if ($state.Stopping) { break } }
+      while (-not $iar.AsyncWaitHandle.WaitOne(250)) {
+        if ([Multilink.ConsoleClose]::Requested) { $state.Stopping = $true }
+        if ($state.Stopping) { break }
+      }
       if ($state.Stopping -and -not $iar.IsCompleted) { break }
       $ctx = $listener.EndGetContext($iar)
       Invoke-Request $ctx $state
@@ -216,7 +224,9 @@ function Start-MultilinkConsole {
     foreach ($r in @($state.Runspaces.ToArray())) {
       try { [void]$r.Handle.AsyncWaitHandle.WaitOne(2000); $r.PowerShell.Stop(); $r.PowerShell.Runspace.Dispose(); $r.PowerShell.Dispose() } catch { }
     }
+    if ($state.JobHandle) { [void][Multilink.JobObject]::Close($state.JobHandle) }
     Remove-Item (Join-Path $env:TEMP 'multilink-console.url') -ErrorAction SilentlyContinue
     Write-ConsoleLine 'Console stopped.'
+    [Multilink.ConsoleClose]::Done()
   }
 }

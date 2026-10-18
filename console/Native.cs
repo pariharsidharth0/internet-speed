@@ -166,6 +166,15 @@ namespace Multilink
         {
             return AssignProcessToJobObject(job, process);
         }
+
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        // Closing the last handle kills every process still in the job.
+        public static bool Close(IntPtr job)
+        {
+            return CloseHandle(job);
+        }
     }
 
     // Console close (X button, logoff, shutdown) arrives on a thread with no
