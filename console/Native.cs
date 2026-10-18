@@ -112,4 +112,111 @@ namespace Multilink
             }
         }
     }
+
+    // A Job Object that kills every assigned process when its last handle
+    // closes - including when the console is killed with the window's X.
+    public static class JobObject
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BasicLimit
+        {
+            public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public UIntPtr Affinity;
+            public uint PriorityClass, SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IoCounters
+        {
+            public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ExtendedLimit
+        {
+            public BasicLimit Basic;
+            public IoCounters Io;
+            public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+        }
+
+        private const int ExtendedLimitInformation = 9;
+        private const uint KillOnJobClose = 0x2000;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+        [DllImport("kernel32.dll")]
+        private static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref ExtendedLimit info, int length);
+        [DllImport("kernel32.dll")]
+        private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+        public static IntPtr CreateKillOnClose()
+        {
+            IntPtr job = CreateJobObject(IntPtr.Zero, null);
+            if (job == IntPtr.Zero) return IntPtr.Zero;
+            ExtendedLimit info = new ExtendedLimit();
+            info.Basic.LimitFlags = KillOnJobClose;
+            SetInformationJobObject(job, ExtendedLimitInformation, ref info, Marshal.SizeOf(typeof(ExtendedLimit)));
+            return job;
+        }
+
+        public static bool Assign(IntPtr job, IntPtr process)
+        {
+            return AssignProcessToJobObject(job, process);
+        }
+    }
+
+    // Console close (X button, logoff, shutdown) arrives on a thread with no
+    // PowerShell runspace, so the handler only raises a flag. The console's
+    // request loop sees it within 250 ms, cleans up, and calls Done(); the
+    // handler waits for that (Windows allows ~5 s) before letting the process die.
+    public static class ConsoleClose
+    {
+        private delegate bool HandlerRoutine(int ctrlType);
+        [DllImport("kernel32.dll")]
+        private static extern bool SetConsoleCtrlHandler(HandlerRoutine handler, bool add);
+
+        private static HandlerRoutine handler;   // kept alive so the GC can't collect it
+        private static readonly ManualResetEvent done = new ManualResetEvent(false);
+        private static volatile bool requested;
+
+        public static bool Requested { get { return requested; } }
+
+        public static void Register()
+        {
+            if (handler != null) return;
+            handler = delegate (int ctrlType)
+            {
+                requested = true;
+                done.WaitOne(4500);
+                return false;
+            };
+            SetConsoleCtrlHandler(handler, true);
+        }
+
+        public static void Done() { done.Set(); }
+    }
+
+    public static class CommandLine
+    {
+        [DllImport("shell32.dll", SetLastError = true)]
+        private static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string cmdLine, out int argc);
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr mem);
+
+        public static string[] Split(string cmdLine)
+        {
+            int argc;
+            IntPtr argv = CommandLineToArgvW(cmdLine, out argc);
+            try
+            {
+                string[] result = new string[argc];
+                for (int i = 0; i < argc; i++) result[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size));
+                return result;
+            }
+            finally { LocalFree(argv); }
+        }
+    }
 }

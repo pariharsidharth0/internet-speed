@@ -11,6 +11,7 @@ $script:ConsoleDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Store.ps1')
 . (Join-Path $PSScriptRoot 'Jobs.ps1')
 . (Join-Path $PSScriptRoot 'Watch.ps1')
+. (Join-Path $PSScriptRoot 'Downloads.ps1')
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'multilink.ps1')
 
 # "METHOD /path" -> scriptblock { param($ctx, $state, $body, $m) }
@@ -148,6 +149,16 @@ Register-Route 'POST' '/api/range' {
   if ($url -notmatch '^https?://') { return New-ApiError 400 'Enter a link that starts with http:// or https://' }
   Start-DeferredResponse $state $ctx { param($u) Invoke-RangeProbe $u } @($url)
 }
+Register-Route 'GET' '/api/downloads' {
+  param($ctx, $state)
+  @{ current = (Get-DownloadDto $state.Downloads.Current)
+     finished = @($state.Downloads.Finished.ToArray() | ForEach-Object { Get-DownloadDto $_ }) }
+}
+Register-Route 'POST' '/api/downloads' { param($ctx, $state, $body) Start-Download $state $body }
+Register-Route 'POST' '/api/downloads/(?<id>[0-9a-f]{12})/cancel' {
+  param($ctx, $state, $body, $m)
+  Stop-Download $state $m.id
+}
 Register-Route 'POST' '/api/stop'  { param($ctx, $state) $state.Stopping = $true; @{} }
 
 # --- entry --------------------------------------------------------------------
@@ -157,6 +168,7 @@ function Start-MultilinkConsole {
   $state = New-ConsoleState
   $state.Root = $Root
   $state.IsAdmin = Test-Admin
+  $state.JobHandle = [Multilink.JobObject]::CreateKillOnClose()
   Update-Paths $state
   $state.Token = New-Token
   $state.Port = if ($Port) { $Port } else { Get-FreePort -Start 8642 -End 8662 }
@@ -185,6 +197,7 @@ function Start-MultilinkConsole {
   } finally {
     $state.Stopping = $true
     $listener.Stop(); $listener.Close()
+    Stop-AllDownloads $state
     $state.IfPoller.Dispose()
     foreach ($r in @($state.Runspaces.ToArray())) {
       try { [void]$r.Handle.AsyncWaitHandle.WaitOne(2000); $r.PowerShell.Stop(); $r.PowerShell.Runspace.Dispose(); $r.PowerShell.Dispose() } catch { }

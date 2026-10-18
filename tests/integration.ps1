@@ -96,6 +96,35 @@ try {
     }
   }
 
+  # --- Task 6: downloads -----------------------------------------------------
+  Check 'download rejects a non-http link' {
+    $r = Http -Method POST -Path '/api/downloads' -Body @{ url = 'nope'; mode = 'all'; dir = $env:TEMP }
+    $r.Status -eq 400 -and $r.Json.error -eq 'Enter a link that starts with http:// or https://'
+  }
+  if (-not $Quick) {
+    $dlDir = Join-Path $env:TEMP 'ml-it'
+    Remove-Item $dlDir -Recurse -Force -ErrorAction SilentlyContinue
+    $iso = 'https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso'
+    $start = Http -Method POST -Path '/api/downloads' -Body @{ url = $iso; mode = 'all'; dir = $dlDir }
+    Check 'download starts' { $start.Status -eq 200 -and $start.Json.id }
+    Check 'a second download is refused' {
+      $r = Http -Method POST -Path '/api/downloads' -Body @{ url = $iso; mode = 'all'; dir = $dlDir }
+      $r.Status -eq 409 -and $r.Json.error -eq 'A download is already running'
+    }
+    Start-Sleep -Seconds 8
+    $d = (Http -Path '/api/downloads').Json.current
+    Check 'download makes progress' { $d.state -eq 'active' -and $d.completedBytes -gt 0 -and $d.filename -eq 'ubuntu-24.04.5.1-desktop-amd64.iso' }
+    $ariaPid = (Get-CimInstance Win32_Process -Filter "Name='aria2c.exe'" | Where-Object { $_.CommandLine -like "*stop-with-process=$($proc.Id)*" }).ProcessId
+    Check 'aria2 is tied to the console' { @($ariaPid).Count -eq 1 }
+    $c = Http -Method POST -Path "/api/downloads/$($start.Json.id)/cancel" -Body @{}
+    Start-Sleep -Seconds 6
+    Check 'cancel stops aria2 and keeps the control file' {
+      $c.Status -eq 200 -and (Http -Path '/api/downloads').Json.current.state -eq 'cancelled' -and
+        -not (Get-Process -Id $ariaPid -ErrorAction SilentlyContinue) -and (Test-Path (Join-Path $dlDir 'ubuntu-24.04.5.1-desktop-amd64.iso.aria2'))
+    }
+    Remove-Item $dlDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
   # --- later tasks append checks here --------------------------------------
 
   Check 'stop -> process exits' {
