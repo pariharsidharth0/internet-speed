@@ -33,6 +33,7 @@ and installs `aria2` (the download engine) if it's missing.
 | `multilink.sh` | Same idea for a Linux PC (terminal menu). |
 | `multilink.desktop` | Linux launcher for `multilink.sh`. |
 | `multi-link-downloads.md` | The deep technical guide. Read if you're curious *why* this works. |
+| `ROADMAP.md` | What's planned next, including Chrome downloads going through Multilink automatically. |
 | `tests/` | Automated tests for the console. |
 
 Keep `multilink.bat`, `multilink.ps1` and the `console` folder **together** or the
