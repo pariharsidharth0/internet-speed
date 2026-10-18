@@ -1,0 +1,73 @@
+<#
+  integration.ps1 - start a real console (no browser) and probe it over HTTP.
+  Run:  powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/integration.ps1
+  Exit code 1 if any check fails.
+#>
+param([switch]$Quick)   # -Quick skips checks that need real internet / downloads
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$urlFile = Join-Path $env:TEMP 'multilink-console.url'
+$script:failed = 0
+
+function Check {
+  param([string]$Name, [scriptblock]$Test)
+  try {
+    $ok = & $Test
+    if ($ok) { Write-Host "PASS  $Name" -ForegroundColor Green }
+    else { Write-Host "FAIL  $Name" -ForegroundColor Red; $script:failed++ }
+  } catch { Write-Host "FAIL  $Name  ($($_.Exception.Message))" -ForegroundColor Red; $script:failed++ }
+}
+
+# curl.exe returns body + status; -H lets us forge Host/Origin.
+function Http {
+  param([string]$Method = 'GET', [string]$Path, $Body = $null, [string[]]$Headers = @(), [switch]$NoToken)
+  $args = @('-s', '-m', '20', '-X', $Method, '-w', "`n%{http_code}")
+  if (-not $NoToken) { $args += @('-H', "X-Multilink-Token: $script:token") }
+  foreach ($h in $Headers) { $args += @('-H', $h) }
+  if ($null -ne $Body) {
+    $tmp = Join-Path $env:TEMP 'ml-it-body.json'
+    [IO.File]::WriteAllText($tmp, (ConvertTo-Json $Body -Depth 6 -Compress))
+    $args += @('-H', 'Content-Type: application/json', '--data-binary', "@$tmp")
+  }
+  $out = & curl.exe @args "$script:base$Path"
+  $lines = @($out)
+  $status = [int]$lines[-1]
+  $text = ($lines[0..($lines.Count - 2)] -join "`n")
+  $json = $null; try { $json = ConvertFrom-Json $text } catch { }
+  [pscustomobject]@{ Status = $status; Text = $text; Json = $json }
+}
+
+Remove-Item $urlFile -ErrorAction SilentlyContinue
+$cmd = ". '$root\console\Server.ps1'; Start-MultilinkConsole -Root '$root' -NoBrowser"
+$proc = Start-Process powershell.exe -PassThru -WindowStyle Hidden -ArgumentList @(
+  '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd)
+
+try {
+  $deadline = (Get-Date).AddSeconds(20)
+  while (-not (Test-Path $urlFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+  if (-not (Test-Path $urlFile)) { throw "console did not start (no $urlFile)" }
+  $script:base = (Get-Content $urlFile -Raw).Trim().TrimEnd('/')
+  $page = Http -Path '/' -NoToken
+  $script:token = [regex]::Match($page.Text, 'name="ml-token" content="([0-9a-f]{64})"').Groups[1].Value
+
+  # --- Task 2: gate --------------------------------------------------------
+  Check 'page served with a token' { $page.Status -eq 200 -and $script:token.Length -eq 64 }
+  Check 'api without token -> 403' { (Http -Path '/api/state' -NoToken).Status -eq 403 }
+  Check 'api with token -> 200' { (Http -Path '/api/state').Status -eq 200 }
+  Check 'forged Host -> rejected (http.sys 400 or gate 403)' { (Http -Path '/api/state' -Headers 'Host: evil.com').Status -in 400, 403 }
+  Check 'foreign Origin -> 403' { (Http -Path '/api/state' -Headers 'Origin: http://evil.com').Status -eq 403 }
+  Check 'unknown api route -> 404' { (Http -Path '/api/nope').Status -eq 404 }
+
+  # --- later tasks append checks here --------------------------------------
+
+  Check 'stop -> process exits' {
+    $null = Http -Method POST -Path '/api/stop' -Body @{}
+    $proc.WaitForExit(8000)
+  }
+} finally {
+  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+}
+
+if ($script:failed) { Write-Host "$script:failed check(s) failed" -ForegroundColor Red; exit 1 }
+Write-Host 'All integration checks passed' -ForegroundColor Green
