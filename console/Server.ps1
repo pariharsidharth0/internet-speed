@@ -8,6 +8,7 @@
 
 $script:ConsoleDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Http.ps1')
+. (Join-Path $PSScriptRoot 'Store.ps1')
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'multilink.ps1')
 
 # "METHOD /path" -> scriptblock { param($ctx, $state, $body, $m) }
@@ -76,15 +77,38 @@ function Invoke-Request {
 }
 
 # --- routes -------------------------------------------------------------------
-Register-Route 'GET'  '/api/state' { param($ctx, $state) @{ ok = $true } }
+Register-Route 'GET'  '/api/state' { param($ctx, $state) Get-StateDto $state }
+Register-Route 'GET'  '/api/series' {
+  param($ctx, $state)
+  $copy = $null
+  [Threading.Monitor]::Enter($state.Series.SyncRoot)
+  try { $copy = @($state.Series.ToArray()) } finally { [Threading.Monitor]::Exit($state.Series.SyncRoot) }
+  @{ intervalSec = 1; samples = $copy }
+}
+Register-Route 'POST' '/api/settings' {
+  param($ctx, $state, $body)
+  if ($body.ContainsKey('capGB')) {
+    $cap = 0.0
+    if (-not [double]::TryParse("$($body.capGB)", [ref]$cap) -or $cap -lt 1) { return New-ApiError 400 'Cap must be at least 1 GB' }
+    $state.Settings.capGB = $cap
+  }
+  if ($body.ContainsKey('mobileAlias')) {
+    $state.Settings.mobileAlias = $(if ($body.mobileAlias) { "$($body.mobileAlias)" } else { $null })
+    $state.Mobile.Alias = Find-MobileAlias $state.Paths $state.Settings.mobileAlias
+  }
+  Save-Settings -Settings $state.Settings
+  Get-StateDto $state
+}
 Register-Route 'POST' '/api/stop'  { param($ctx, $state) $state.Stopping = $true; @{} }
 
 # --- entry --------------------------------------------------------------------
 function Start-MultilinkConsole {
   param([string]$Root = (Split-Path -Parent $PSScriptRoot), [switch]$NoBrowser, [int]$Port = 0)
 
-  $state = [hashtable]::Synchronized(@{ Stopping = $false })
+  $state = New-ConsoleState
   $state.Root = $Root
+  $state.IsAdmin = Test-Admin
+  Update-Paths $state
   $state.Token = New-Token
   $state.Port = if ($Port) { $Port } else { Get-FreePort -Start 8642 -End 8662 }
 
@@ -94,6 +118,7 @@ function Start-MultilinkConsole {
   $url = "http://localhost:$($state.Port)/"
   [IO.File]::WriteAllText((Join-Path $env:TEMP 'multilink-console.url'), $url)
   Write-ConsoleLine "Multilink console running at $url  (close this window to stop)"
+  Start-Sampler $state
   if (-not $NoBrowser) { Start-Process explorer.exe $url }
 
   try {
@@ -107,7 +132,12 @@ function Start-MultilinkConsole {
       Invoke-Request $ctx $state
     }
   } finally {
+    $state.Stopping = $true
     $listener.Stop(); $listener.Close()
+    $state.IfPoller.Dispose()
+    foreach ($r in @($state.Runspaces.ToArray())) {
+      try { [void]$r.Handle.AsyncWaitHandle.WaitOne(2000); $r.PowerShell.Stop(); $r.PowerShell.Runspace.Dispose(); $r.PowerShell.Dispose() } catch { }
+    }
     Remove-Item (Join-Path $env:TEMP 'multilink-console.url') -ErrorAction SilentlyContinue
     Write-ConsoleLine 'Console stopped.'
   }

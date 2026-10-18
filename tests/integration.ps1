@@ -59,6 +59,19 @@ try {
   Check 'foreign Origin -> 403' { (Http -Path '/api/state' -Headers 'Origin: http://evil.com').Status -eq 403 }
   Check 'unknown api route -> 404' { (Http -Path '/api/nope').Status -eq 404 }
 
+  # --- Task 3: state + series -----------------------------------------------
+  # The sampler runspace needs a few seconds to load the engine.
+  $deadline = (Get-Date).AddSeconds(15)
+  do { Start-Sleep -Milliseconds 500; $n = @((Http -Path '/api/series').Json.samples).Count } while ($n -lt 3 -and (Get-Date) -lt $deadline)
+  $st = (Http -Path '/api/state').Json
+  Check 'state lists paths' { @($st.paths).Count -ge 1 -and $st.paths[0].alias }
+  Check 'series has >=2 samples keyed by every path' {
+    $se = (Http -Path '/api/series').Json
+    $aliases = @($st.paths | ForEach-Object { $_.alias })
+    @($se.samples).Count -ge 2 -and -not (@($se.samples | Where-Object { $s = $_; @($aliases | Where-Object { -not $s.links.PSObject.Properties[$_] }).Count }).Count)
+  }
+  Check 'settings rejects cap 0' { (Http -Method POST -Path '/api/settings' -Body @{ capGB = 0 }).Status -eq 400 }
+
   # --- later tasks append checks here --------------------------------------
 
   Check 'stop -> process exits' {
