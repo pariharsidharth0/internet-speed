@@ -83,12 +83,17 @@ function Get-Paths {
     $ip = ($cfg.IPv4Address | Select-Object -First 1).IPAddress
     if (-not $ip -or $ip -like '169.254.*') { continue }
     $mi = (Get-NetIPInterface -InterfaceIndex $cfg.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue)
+    $v6 = @(Get-NetIPAddress -InterfaceIndex $cfg.InterfaceIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -notlike 'fe80*' } | ForEach-Object { $_.IPAddress })
     $out += [pscustomobject]@{
-      Alias   = $cfg.InterfaceAlias
-      IP      = $ip
-      Gateway = ($cfg.IPv4DefaultGateway.NextHop | Select-Object -First 1)
-      Metric  = $(if ($mi) { $mi.InterfaceMetric } else { $null })
-      Auto    = $(if ($mi) { $mi.AutomaticMetric } else { $null })
+      Alias          = $cfg.InterfaceAlias
+      IP             = $ip
+      Gateway        = ($cfg.IPv4DefaultGateway.NextHop | Select-Object -First 1)
+      Metric         = $(if ($mi) { $mi.InterfaceMetric } else { $null })
+      Auto           = $(if ($mi) { $mi.AutomaticMetric } else { $null })
+      InterfaceIndex = $cfg.InterfaceIndex
+      Description    = $cfg.InterfaceDescription
+      IPv6           = $v6
     }
   }
   $out | Sort-Object IP -Unique
@@ -140,6 +145,85 @@ function Get-EgressVia {
     }
   }
   return $null
+}
+
+# --- latency ----------------------------------------------------------------
+function ConvertFrom-PingOutput {
+  param([string]$Text)
+  $times = @([regex]::Matches($Text, 'time[=<](\d+)ms') | ForEach-Object { [int]$_.Groups[1].Value })
+  $m = [regex]::Match($Text, '\((\d+)% loss\)')
+  $loss = if ($m.Success) { [int]$m.Groups[1].Value } else { 100 }
+  @{ Times = $times; LossPct = $loss }
+}
+
+# Jitter = mean absolute difference between successive replies.
+function Get-LatencyStats {
+  param([int[]]$Times, [int]$LossPct)
+  $avg = [math]::Round(($Times | Measure-Object -Average).Average, 1)
+  $max = ($Times | Measure-Object -Maximum).Maximum
+  $d = @(); for ($i = 1; $i -lt $Times.Count; $i++) { $d += [math]::Abs($Times[$i] - $Times[$i-1]) }
+  $jit = if ($d.Count) { [math]::Round(($d | Measure-Object -Average).Average, 1) } else { 0 }
+  @{ avgMs = $avg; maxMs = $max; jitterMs = $jit; lossPct = $LossPct }
+}
+
+# ICMP to 8.8.8.8 is often blocked, so try a few targets; if all ICMP fails,
+# time a TCP connect to 1.1.1.1:443 instead.
+function Measure-PathLatency {
+  param($Path)
+  $times = @(); $loss = 100
+  foreach ($dst in @('1.1.1.1','8.8.8.8',$Path.Gateway)) {
+    if (-not $dst) { continue }
+    $p = ConvertFrom-PingOutput (& ping.exe -n 6 -w 1500 -S $Path.IP $dst 2>&1 | Out-String)
+    $times = @($p.Times); $loss = $p.LossPct
+    if ($times.Count -gt 1) { break }
+  }
+  $now = (Get-Date).ToString('o')
+  if ($times.Count -gt 1) {
+    $s = Get-LatencyStats $times $loss
+    $s.tcpOnly = $false; $s.measuredAt = $now
+    return $s
+  }
+  $tcpMs = $null
+  try {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    $tcp.Client.Bind((New-Object System.Net.IPEndPoint ([Net.IPAddress]$Path.IP, 0)))
+    $iar = $tcp.BeginConnect([Net.IPAddress]::Parse('1.1.1.1'), 443, $null, $null)
+    if ($iar.AsyncWaitHandle.WaitOne(2000)) {
+      $tcp.EndConnect($iar)
+      $tcpMs = [math]::Round($sw.Elapsed.TotalMilliseconds, 0)
+    }
+    $tcp.Close()
+  } catch { }
+  if ($tcpMs) { return @{ avgMs = $tcpMs; maxMs = $tcpMs; jitterMs = $null; lossPct = $loss; tcpOnly = $true; measuredAt = $now } }
+  return @{ avgMs = $null; maxMs = $null; jitterMs = $null; lossPct = $loss; tcpOnly = $false; measuredAt = $now }
+}
+
+# --- metrics ----------------------------------------------------------------
+# Preferred link gets metric 10, the rest 60. Both keep their default route,
+# so multi-path downloads still work. Returns log lines; needs admin.
+function Set-PathMetrics {
+  param([string]$PreferredAlias)
+  $lines = @()
+  foreach ($x in @(Get-Paths)) {
+    $m = if ($x.Alias -eq $PreferredAlias) { 10 } else { 60 }
+    try {
+      Set-NetIPInterface -InterfaceAlias $x.Alias -AddressFamily IPv4 -InterfaceMetric $m -ErrorAction Stop
+      $lines += ("  {0,-14} metric -> {1}" -f $x.Alias, $m)
+    } catch { $lines += ("  {0}: {1}" -f $x.Alias, $_.Exception.Message.Split("`n")[0]) }
+  }
+  $lines
+}
+
+function Reset-PathMetrics {
+  $lines = @()
+  foreach ($x in @(Get-Paths)) {
+    try {
+      Set-NetIPInterface -InterfaceAlias $x.Alias -AddressFamily IPv4 -AutomaticMetric Enabled -ErrorAction Stop
+      $lines += ("  {0,-14} automatic metric restored" -f $x.Alias)
+    } catch { $lines += ("  {0}: {1}" -f $x.Alias, $_.Exception.Message.Split("`n")[0]) }
+  }
+  $lines
 }
 
 # --- the check that actually matters ---------------------------------------
@@ -222,38 +306,13 @@ function Invoke-Check {
   # so try a few targets; if all ICMP fails, time a TCP connect to 1.1.1.1:443.
   Say ""; Info "Latency per path (games care about this, not bandwidth):"
   foreach ($x in $paths) {
-    $t = @(); $loss = '100'
-    foreach ($dst in @('1.1.1.1','8.8.8.8',$x.Gateway)) {
-      if (-not $dst) { continue }
-      $out = & ping.exe -n 6 -w 1500 -S $x.IP $dst 2>&1 | Out-String
-      $t = @([regex]::Matches($out,'time[=<](\d+)ms') | ForEach-Object { [int]$_.Groups[1].Value })
-      $loss = ([regex]::Match($out,'\((\d+)% loss\)')).Groups[1].Value
-      if ($t.Count -gt 1) { break }
-    }
-    if ($t.Count -gt 1) {
-      $avg=[math]::Round(($t|Measure-Object -Average).Average,1)
-      $mx=($t|Measure-Object -Maximum).Maximum
-      $d=@(); for($i=1;$i -lt $t.Count;$i++){$d+=[math]::Abs($t[$i]-$t[$i-1])}
-      $jit=[math]::Round(($d|Measure-Object -Average).Average,1)
-      "  {0,-14} avg {1,6} ms | max {2,5} ms | jitter {3,5} ms | loss {4}%" -f $x.Alias,$avg,$mx,$jit,$loss | Say
+    $l = Measure-PathLatency $x
+    if ($l.avgMs -eq $null) {
+      "  {0,-14} no replies (ICMP loss {1}%)" -f $x.Alias, $l.lossPct | Say
+    } elseif ($l.tcpOnly) {
+      "  {0,-14} TCP ~{1} ms to 1.1.1.1:443 (ICMP blocked)" -f $x.Alias, $l.avgMs | Say
     } else {
-      $tcpMs = $null
-      try {
-        $sw = [Diagnostics.Stopwatch]::StartNew()
-        $tcp = New-Object System.Net.Sockets.TcpClient
-        $tcp.Client.Bind((New-Object System.Net.IPEndPoint ([Net.IPAddress]$x.IP, 0)))
-        $iar = $tcp.BeginConnect([Net.IPAddress]::Parse('1.1.1.1'), 443, $null, $null)
-        if ($iar.AsyncWaitHandle.WaitOne(2000)) {
-          $tcp.EndConnect($iar)
-          $tcpMs = [math]::Round($sw.Elapsed.TotalMilliseconds, 0)
-        }
-        $tcp.Close()
-      } catch { }
-      if ($tcpMs) {
-        "  {0,-14} TCP ~{1} ms to 1.1.1.1:443 (ICMP blocked)" -f $x.Alias, $tcpMs | Say
-      } else {
-        "  {0,-14} no replies (ICMP loss {1}%)" -f $x.Alias, $loss | Say
-      }
+      "  {0,-14} avg {1,6} ms | max {2,5} ms | jitter {3,5} ms | loss {4}%" -f $x.Alias,$l.avgMs,$l.maxMs,$l.jitterMs,$l.lossPct | Say
     }
   }
   Dim "  Lowest avg+jitter is your gaming link. Send bulk downloads over the other one."
@@ -302,13 +361,7 @@ function Invoke-Optimise {
   $sel = Read-Host "Which path should ordinary traffic prefer? [0-$($paths.Count-1)]"
   if ($sel -notmatch '^\d+$' -or [int]$sel -ge $paths.Count) { Fail "Invalid selection."; return }
   $pref = $paths[[int]$sel]
-  foreach ($x in $paths) {
-    $m = if ($x.Alias -eq $pref.Alias) { 10 } else { 60 }
-    try {
-      Set-NetIPInterface -InterfaceAlias $x.Alias -AddressFamily IPv4 -InterfaceMetric $m -ErrorAction Stop
-      Good ("  {0,-14} metric -> {1}" -f $x.Alias, $m)
-    } catch { Fail ("  {0}: {1}" -f $x.Alias, $_.Exception.Message.Split("`n")[0]) }
-  }
+  Set-PathMetrics $pref.Alias | Good
   Say ""
   Good ("Ordinary traffic will now prefer {0}." -f $pref.Alias)
   Say  "Both paths keep their default route, so multi-path downloads still work."
@@ -321,12 +374,7 @@ function Invoke-Optimise {
 
 function Invoke-Undo {
   if (-not (Test-Admin)) { Invoke-Elevated 'undo'; return }
-  foreach ($x in @(Get-Paths)) {
-    try {
-      Set-NetIPInterface -InterfaceAlias $x.Alias -AddressFamily IPv4 -AutomaticMetric Enabled -ErrorAction Stop
-      Good ("  {0,-14} automatic metric restored" -f $x.Alias)
-    } catch { Fail ("  {0}: {1}" -f $x.Alias, $_.Exception.Message.Split("`n")[0]) }
-  }
+  Reset-PathMetrics | Good
 }
 
 # --- menu -------------------------------------------------------------------
@@ -359,6 +407,9 @@ function Show-Menu {
     }
   }
 }
+
+# Dot-sourcing (". .\multilink.ps1") only defines the functions.
+if ($MyInvocation.InvocationName -eq '.') { return }
 
 switch ($Action) {
   'check'    { Invoke-Check }
