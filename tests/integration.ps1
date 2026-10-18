@@ -138,6 +138,12 @@ try {
     $j.state -eq 'done' -and @($j.log | Where-Object { $_.text -like '*Interface metrics*' }).Count -ge 1
   }
 
+  # --- Task 8: apps (not elevated -> connections mode) ----------------------
+  $deadline = (Get-Date).AddSeconds(20)
+  do { Start-Sleep 1; $apps = (Http -Path '/api/apps').Json } while (-not @($apps.rows).Count -and (Get-Date) -lt $deadline)
+  Check 'apps: connections mode without admin' { $apps.mode -eq 'connections' }
+  Check 'apps: rows name processes, rates unknown' { @($apps.rows).Count -ge 1 -and $apps.rows[0].exe -and $null -eq $apps.rows[0].downMbps }
+
   # --- later tasks append checks here --------------------------------------
 
   Check 'stop -> process exits' {

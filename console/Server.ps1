@@ -13,6 +13,7 @@ $script:ConsoleDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'Watch.ps1')
 . (Join-Path $PSScriptRoot 'Downloads.ps1')
 . (Join-Path $PSScriptRoot 'Network.ps1')
+. (Join-Path $PSScriptRoot 'Apps.ps1')
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'multilink.ps1')
 
 # "METHOD /path" -> scriptblock { param($ctx, $state, $body, $m) }
@@ -169,6 +170,7 @@ Register-Route 'POST' '/api/reset' {
   if ($apply) { @{ jobId = (Start-ConsoleJob $state 'reset' { param($state, $emit) Invoke-ResetJob $state $emit $true }) } }
   else { @{ jobId = (Start-ConsoleJob $state 'reset' { param($state, $emit) Invoke-ResetJob $state $emit $false }) } }
 }
+Register-Route 'GET' '/api/apps' { param($ctx, $state) $state.Apps }
 Register-Route 'POST' '/api/stop'  { param($ctx, $state) $state.Stopping = $true; @{} }
 
 # --- entry --------------------------------------------------------------------
@@ -191,6 +193,7 @@ function Start-MultilinkConsole {
   Write-ConsoleLine "Multilink console running at $url  (close this window to stop)"
   Start-Sampler $state
   Start-Watcher $state
+  Start-AppMonitor $state
   Start-ConsoleJob $state 'latency' { param($state, $emit) Invoke-LatencyPass $state $null } | Out-Null
   if (-not $NoBrowser) { Start-Process explorer.exe $url }
 
@@ -208,6 +211,7 @@ function Start-MultilinkConsole {
     $state.Stopping = $true
     $listener.Stop(); $listener.Close()
     Stop-AllDownloads $state
+    if ($state.NetMonitor) { try { $state.NetMonitor.Dispose() } catch { } }
     $state.IfPoller.Dispose()
     foreach ($r in @($state.Runspaces.ToArray())) {
       try { [void]$r.Handle.AsyncWaitHandle.WaitOne(2000); $r.PowerShell.Stop(); $r.PowerShell.Runspace.Dispose(); $r.PowerShell.Dispose() } catch { }
