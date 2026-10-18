@@ -37,9 +37,9 @@ function Get-SeparationLines {
 function Get-PublicIpVia {
   param([string]$LocalIP)
   foreach ($u in $script:IpServices) {
-    $args = @('-sS', '--ipv4', '--connect-timeout', '4', '--max-time', '6')
-    if ($LocalIP) { $args += @('--interface', $LocalIP) }
-    $raw = & curl.exe @args $u 2>$null
+    $curlArgs = @('-sS', '--ipv4', '--connect-timeout', '4', '--max-time', '6')
+    if ($LocalIP) { $curlArgs += @('--interface', $LocalIP) }
+    $raw = & curl.exe @curlArgs $u 2>$null
     $t = if ($null -eq $raw) { '' } else { "$raw".Trim() }
     if (Test-Ipv4Text $t) { return $t }
   }
@@ -97,13 +97,14 @@ function ConvertFrom-RangeProbe {
 
 function Invoke-RangeProbe {
   param([string]$Url)
-  $head = (& curl.exe -sSIL --max-time 8 $Url 2>&1 | Out-String)
+  $Url = ConvertTo-SafeUrl $Url
+  if (-not $Url) { throw 'Enter a link that starts with http:// or https://' }
+  $head = Invoke-Curl @('-sSIL', '--max-time', '8', '--url', $Url) -MergeError
   $r = ConvertFrom-RangeProbe $head 0
   if (-not $r.splits) {
     # Some servers omit Accept-Ranges but still honour a Range request.
-    $code = & curl.exe -s -L -o NUL -r 0-0 -w '%{http_code}' --max-time 8 $Url 2>$null
-    $tail = (& curl.exe -sS -L -r 0-0 -D - -o NUL --max-time 8 $Url 2>&1 | Out-String)
-    if ("$code" -eq '206') { $r = ConvertFrom-RangeProbe $tail 206 }
+    $tail = Invoke-Curl @('-sS', '-L', '-r', '0-0', '-D', '-', '-o', 'NUL', '--max-time', '8', '-w', '%{http_code}', '--url', $Url)
+    if ($tail -match '206\s*$') { $r = ConvertFrom-RangeProbe ($tail -replace '\d{3}\s*$', '') 206 }
   }
   if (-not $r.filename) {
     try { $r.filename = [Uri]::UnescapeDataString(([Uri]$Url).Segments[-1]) } catch { }

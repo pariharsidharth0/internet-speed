@@ -191,4 +191,8 @@ function Start-ConsoleApp {
 # Dot-sourcing (". .\multilink.ps1") only defines the functions.
 if ($MyInvocation.InvocationName -eq '.') { return }
 
-Start-ConsoleApp
+try { Start-ConsoleApp }
+catch {
+  Fail "The console stopped with an error: $($_.Exception.Message)"
+  Read-Host 'Press Enter to close'
+}

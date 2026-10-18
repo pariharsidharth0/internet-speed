@@ -141,15 +141,17 @@ function Find-MobileAlias {
   $null
 }
 
+# A reading older than 3 s means the adapter stopped answering (unplugged or a
+# hung driver): drop it so the rate reads 0 instead of freezing.
 function Get-CounterTable {
-  param($Paths, $Poller)
+  param($Paths, $Poller, [double]$Now = [Multilink.IfPoller]::Now())
   $t = @{}
   $want = @($Paths | ForEach-Object { [uint32]$_.InterfaceIndex })
   foreach ($i in $Poller.Tracked()) { if ($want -notcontains $i) { $Poller.Untrack($i) } }
   foreach ($p in @($Paths)) {
     $Poller.Track([uint32]$p.InterfaceIndex)
     $v = $Poller.Read([uint32]$p.InterfaceIndex)
-    if ($v) { $t[$p.Alias] = @{ Rx = $v[0]; Tx = $v[1]; At = $v[2] } }
+    if ($v -and ($Now - $v[2]) -le 3) { $t[$p.Alias] = @{ Rx = $v[0]; Tx = $v[1]; At = $v[2] } }
   }
   $t
 }

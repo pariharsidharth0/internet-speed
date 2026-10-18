@@ -147,8 +147,8 @@ Register-Route 'POST' '/api/baseline' {
 }
 Register-Route 'POST' '/api/range' {
   param($ctx, $state, $body)
-  $url = "$($body.url)".Trim()
-  if ($url -notmatch '^https?://') { return New-ApiError 400 'Enter a link that starts with http:// or https://' }
+  $url = ConvertTo-SafeUrl "$($body.url)"
+  if (-not $url) { return New-ApiError 400 'Enter a link that starts with http:// or https://' }
   Start-DeferredResponse $state $ctx { param($u) Invoke-RangeProbe $u } @($url)
 }
 Register-Route 'GET' '/api/downloads' {
@@ -188,11 +188,9 @@ function Start-MultilinkConsole {
   $state.JobHandle = [Multilink.JobObject]::CreateKillOnClose()
   Update-Paths $state
   $state.Token = New-Token
-  $state.Port = if ($Port) { $Port } else { Get-FreePort -Start 8642 -End 8662 }
-
-  $listener = New-Object System.Net.HttpListener
-  $listener.Prefixes.Add("http://localhost:$($state.Port)/")
-  $listener.Start()
+  $l = if ($Port) { Start-ConsoleListener -Start $Port -End $Port } else { Start-ConsoleListener -Start 8642 -End 8662 }
+  $listener = $l.Listener
+  $state.Port = $l.Port
   $url = "http://localhost:$($state.Port)/"
   [IO.File]::WriteAllText((Join-Path $env:TEMP 'multilink-console.url'), $url)
   Write-ConsoleLine "Multilink console running at $url  (close this window to stop)"

@@ -44,3 +44,38 @@ Describe 'Get-FreePort' {
     try { { Get-FreePort -Start 8650 -End 8650 } | Should Throw 'No free port between 8650 and 8650' } finally { $l.Stop() }
   }
 }
+
+Describe 'ConvertTo-SafeUrl' {
+  It 'rejects non-http and relative links' {
+    ConvertTo-SafeUrl 'javascript:alert(1)' | Should BeNullOrEmpty
+    ConvertTo-SafeUrl '/relative/path' | Should BeNullOrEmpty
+    ConvertTo-SafeUrl 'ftp://x/a.iso' | Should BeNullOrEmpty
+  }
+  It 'escapes quotes and spaces so nothing can become a separate argument' {
+    $u = ConvertTo-SafeUrl 'http://127.0.0.1:1/\" -w INJECTED -o NUL http://127.0.0.1:1/'
+    $u | Should Not BeNullOrEmpty
+    $u -match '[\s"]' | Should Be $false
+  }
+  It 'keeps a normal link intact' {
+    ConvertTo-SafeUrl 'https://releases.ubuntu.com/24.04/a.iso?x=1&y=2' | Should Be 'https://releases.ubuntu.com/24.04/a.iso?x=1&y=2'
+  }
+}
+
+Describe 'Invoke-Curl' {
+  It 'passes a hostile value as one argument (no option injection)' {
+    $payload = 'http://127.0.0.1:1/\" -w INJECTED-%{http_code} -o NUL http://127.0.0.1:1/'
+    $out = Invoke-Curl @('-s', '--max-time', '3', '-o', 'NUL', '-w', 'X%{http_code}', '--url', $payload)
+    "$out" | Should Be 'X000'
+  }
+}
+
+Describe 'Start-ConsoleListener' {
+  It 'falls back when the first port is held on all interfaces' {
+    $l = New-Object System.Net.Sockets.TcpListener ([Net.IPAddress]::Any), 8655
+    $l.Start()
+    try {
+      $r = Start-ConsoleListener -Start 8655 -End 8660
+      try { $r.Port | Should Not Be 8655; $r.Listener.IsListening | Should Be $true } finally { $r.Listener.Close() }
+    } finally { $l.Stop() }
+  }
+}

@@ -1,5 +1,6 @@
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'multilink.ps1')
+. (Join-Path $root 'console\Http.ps1')
 . (Join-Path $root 'console\Store.ps1')
 . (Join-Path $root 'console\Jobs.ps1')
 . (Join-Path $root 'console\Watch.ps1')

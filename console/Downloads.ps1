@@ -10,35 +10,16 @@
 # --- pure helpers ---------------------------------------------------------------
 function New-Aria2ArgList {
   param([ValidateSet('all', 'one')][string]$Mode, [string[]]$IPs, [string]$Dir,
-        [int]$Port, [string]$Secret, [int]$ConsolePid)
-  $a = @('-x16', '-s16', '-k1M', '--continue=true', '--file-allocation=none', '--async-dns=false',
+        [int]$Port, [string]$Secret, [int]$ConsolePid, [switch]$Continue)
+  # --continue only when resuming: without a .aria2 control file aria2 would
+  # treat an unrelated same-named file as a partial download of this one.
+  $a = @('-x16', '-s16', '-k1M', '--file-allocation=none', '--async-dns=false',
          '--max-tries=5', '--retry-wait=2', '--connect-timeout=10', '--timeout=20', "--dir=$Dir",
          '--enable-rpc=true', '--rpc-listen-all=false', "--rpc-listen-port=$Port", "--rpc-secret=$Secret",
          "--stop-with-process=$ConsolePid", '--quiet=true', '--summary-interval=0')
   if ($Mode -eq 'all') { $a += "--multiple-interface=$($IPs -join ',')" } else { $a += "--interface=$($IPs[0])" }
+  if ($Continue) { $a += '--continue=true' }
   $a
-}
-
-# Windows argv quoting (the rules CommandLineToArgvW reverses): quote when
-# needed, double backslashes that precede a quote, escape embedded quotes.
-function ConvertTo-CommandLine {
-  param([string[]]$Parts)
-  ($Parts | ForEach-Object {
-    if ($_ -and $_ -notmatch '[\s"]') { return $_ }
-    $sb = New-Object Text.StringBuilder
-    [void]$sb.Append('"')
-    $slashes = 0
-    foreach ($ch in $_.ToCharArray()) {
-      if ($ch -eq '\') { $slashes++; continue }
-      if ($ch -eq '"') { [void]$sb.Append('\', $slashes * 2 + 1) }
-      elseif ($slashes) { [void]$sb.Append('\', $slashes) }
-      $slashes = 0
-      [void]$sb.Append($ch)
-    }
-    [void]$sb.Append('\', $slashes * 2)
-    [void]$sb.Append('"')
-    $sb.ToString()
-  }) -join ' '
 }
 
 function Get-CapAction {
@@ -53,8 +34,8 @@ function Get-CapAction {
 function Test-DownloadRequest {
   param([hashtable]$Req, $Paths, [string]$MobileAlias, [bool]$CapHit, [bool]$Active)
   $fail = { param($status, $msg) @{ status = $status; error = $msg } }
-  $url = "$($Req.url)".Trim()
-  if ($url -notmatch '^https?://') { return & $fail 400 'Enter a link that starts with http:// or https://' }
+  $url = ConvertTo-SafeUrl "$($Req.url)"
+  if (-not $url) { return & $fail 400 'Enter a link that starts with http:// or https://' }
   if ($Active) { return & $fail 409 'A download is already running' }
   $dir = "$($Req.dir)".Trim()
   if (-not $dir) { return & $fail 400 'Choose a folder to save to' }
@@ -83,31 +64,38 @@ function Test-DownloadRequest {
 }
 
 # --- aria2 RPC ------------------------------------------------------------------
-# WebClient with no proxy: Invoke-RestMethod in 5.1 can route localhost through
-# a system proxy.
+# No proxy (Invoke-RestMethod in 5.1 can route localhost through a system
+# proxy) and a 2 s timeout, so a hung aria2 can't stall the sampler or the
+# request loop.
 function Invoke-Aria2Rpc {
   param([int]$Port, [string]$Secret, [string]$Method, [object[]]$Params = @())
   $body = ConvertTo-Json -Depth 6 -Compress -InputObject @{
     jsonrpc = '2.0'; id = 'ml'; method = $Method; params = @("token:$Secret") + $Params }
-  $wc = New-Object Net.WebClient
-  $wc.Proxy = $null
-  $wc.Headers['Content-Type'] = 'application/json'
-  try { $text = $wc.UploadString("http://127.0.0.1:$Port/jsonrpc", $body) }
-  finally { $wc.Dispose() }
+  $bytes = [Text.Encoding]::UTF8.GetBytes($body)
+  $req = [Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/jsonrpc")
+  $req.Method = 'POST'; $req.ContentType = 'application/json'; $req.Proxy = $null
+  $req.Timeout = 2000; $req.ReadWriteTimeout = 2000
+  $res = $null
+  try {
+    $st = $req.GetRequestStream(); try { $st.Write($bytes, 0, $bytes.Length) } finally { $st.Close() }
+    try { $res = $req.GetResponse() } catch [Net.WebException] { if ($_.Exception.Response) { $res = $_.Exception.Response } else { throw } }
+    $rd = New-Object IO.StreamReader($res.GetResponseStream(), [Text.Encoding]::UTF8)
+    try { $text = $rd.ReadToEnd() } finally { $rd.Close() }
+  } finally { if ($res) { $res.Close() } }
   $r = ConvertFrom-Json $text
   if ($r.error) { throw "aria2: $($r.error.message)" }
   $r.result
 }
 
 function Start-Aria2Process {
-  param($State, [hashtable]$Plan, [string]$OutName)
+  param($State, [hashtable]$Plan, [string]$OutName, [switch]$Continue)
   $aria = Get-Aria
   if (-not $aria) { throw 'aria2 is not installed and could not be installed. Install it with: winget install aria2.aria2' }
   $port = Get-FreePort -Start 6800 -End 6899
   $secret = New-Token
-  $args = New-Aria2ArgList -Mode $Plan.mode -IPs $Plan.ips -Dir $Plan.dir -Port $port -Secret $secret -ConsolePid $PID
+  $ariaArgs = New-Aria2ArgList -Mode $Plan.mode -IPs $Plan.ips -Dir $Plan.dir -Port $port -Secret $secret -ConsolePid $PID -Continue:$Continue
   $psi = New-Object Diagnostics.ProcessStartInfo $aria
-  $psi.Arguments = ConvertTo-CommandLine $args
+  $psi.Arguments = ConvertTo-CommandLine $ariaArgs
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
   $proc = [Diagnostics.Process]::Start($psi)
@@ -123,7 +111,8 @@ function Start-Aria2Process {
 
   $opts = @{ dir = $Plan.dir }
   if ($OutName) { $opts.out = $OutName }
-  $gid = Invoke-Aria2Rpc $port $secret 'aria2.addUri' (@(, @($Plan.url)) + @($opts))
+  try { $gid = Invoke-Aria2Rpc $port $secret 'aria2.addUri' (@(, @($Plan.url)) + @($opts)) }
+  catch { try { $proc.Kill() } catch { }; throw }
   @{ Port = $port; Secret = $secret; Gid = $gid; Pid = $proc.Id; Process = $proc }
 }
 
@@ -135,7 +124,7 @@ function Start-Download {
   $plan = Test-DownloadRequest $Req $State.Paths $State.Mobile.Alias ([bool]$State.CapHit) $active
   if ($plan.error) { return New-ApiError $plan.status $plan.error }
 
-  $proc = Start-Aria2Process $State $plan $null
+  $proc = Start-Aria2Process $State $plan $null -Continue:([bool]$Req.resume)
   if ($cur) { [void]$State.Downloads.Finished.Add($cur); while ($State.Downloads.Finished.Count -gt 20) { $State.Downloads.Finished.RemoveAt(0) } }
   $perLink = @{}
   foreach ($p in @($State.Paths)) { if ($plan.ips -contains $p.IP) { $perLink[$p.Alias] = [double]0 } }
@@ -181,9 +170,15 @@ function Restart-DownloadWired {
   $w = @($State.Paths | Where-Object { $_.Alias -ne $State.Mobile.Alias }) | Select-Object -First 1
   if (-not $w) { Stop-Download $State $dl.id -ByCap | Out-Null; return }
   Stop-Aria2 $dl -Force
-  try { $dl.Process.WaitForExit(4000) | Out-Null } catch { }
+  # Two aria2 processes must never write one file.
+  try { if (-not $dl.Process.WaitForExit(4000)) { $dl.Process.Kill() } } catch { }
   $plan = @{ ips = @($w.IP); mode = 'one'; link = $w.Alias; url = $dl.url; dir = $dl.dir }
-  $proc = Start-Aria2Process $State $plan $dl.filename
+  $proc = Start-Aria2Process $State $plan $dl.filename -Continue
+  # The user may have cancelled or started another download meanwhile.
+  if ($State.Downloads.Current -ne $dl -or $dl.state -ne 'active') {
+    try { Invoke-Aria2Rpc $proc.Port $proc.Secret 'aria2.forceShutdown' | Out-Null } catch { }
+    return
+  }
   foreach ($k in $proc.Keys) { $dl[$k] = $proc[$k] }
   $dl.KillAt = $null
   $dl.mode = 'one'; $dl.link = $w.Alias; $dl.switchedByCap = $true

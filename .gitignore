@@ -1,1 +1,15 @@
+# Old archive of this folder
 /internet speed.zip
+
+# Local agent workspace (plan ledger, review packages)
+.superpowers/
+
+# aria2 partial-download control files, if a test or download lands in the repo
+*.aria2
+
+# OS and editor clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

@@ -104,3 +104,64 @@ function Read-JsonBody {
   if ($h -isnot [hashtable]) { return @{} }
   $h
 }
+
+# Windows argv quoting (the rules CommandLineToArgvW reverses): quote when
+# needed, double backslashes that precede a quote, escape embedded quotes.
+function ConvertTo-CommandLine {
+  param([string[]]$Parts)
+  ($Parts | ForEach-Object {
+    if ($_ -and $_ -notmatch '[\s"]') { return $_ }
+    $sb = New-Object Text.StringBuilder
+    [void]$sb.Append('"')
+    $slashes = 0
+    foreach ($ch in $_.ToCharArray()) {
+      if ($ch -eq '\') { $slashes++; continue }
+      if ($ch -eq '"') { [void]$sb.Append('\', $slashes * 2 + 1) }
+      elseif ($slashes) { [void]$sb.Append('\', $slashes) }
+      $slashes = 0
+      [void]$sb.Append($ch)
+    }
+    [void]$sb.Append('\', $slashes * 2)
+    [void]$sb.Append('"')
+    $sb.ToString()
+  }) -join ' '
+}
+
+# The only form of a user-supplied link that leaves this process: absolute
+# http(s), re-serialised so spaces, quotes and backslashes are %-escaped and
+# can never split into extra arguments.
+function ConvertTo-SafeUrl {
+  param([string]$Url)
+  $u = $null
+  if (-not [Uri]::TryCreate("$Url".Trim(), [UriKind]::Absolute, [ref]$u)) { return $null }
+  if ($u.Scheme -ne 'http' -and $u.Scheme -ne 'https') { return $null }
+  $u.AbsoluteUri
+}
+
+# curl with real argv quoting. Windows PowerShell 5.1 builds `& curl.exe $x`
+# command lines without escaping a trailing backslash-quote, which lets a
+# crafted value smuggle in extra curl options.
+function Invoke-Curl {
+  param([string[]]$Arguments, [switch]$MergeError)
+  $psi = New-Object Diagnostics.ProcessStartInfo 'curl.exe'
+  $psi.Arguments = ConvertTo-CommandLine $Arguments
+  $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+  $p = [Diagnostics.Process]::Start($psi)
+  $err = $p.StandardError.ReadToEndAsync()
+  $out = $p.StandardOutput.ReadToEnd()
+  $p.WaitForExit()
+  if ($MergeError) { $out + $err.Result } else { $out }
+}
+
+# Starting the listener is the only reliable probe: a port held on 0.0.0.0
+# passes a loopback test-bind but still makes HttpListener.Start() fail.
+function Start-ConsoleListener {
+  param([int]$Start = 8642, [int]$End = 8662)
+  for ($p = $Start; $p -le $End; $p++) {
+    $l = New-Object System.Net.HttpListener
+    $l.Prefixes.Add("http://localhost:$p/")
+    try { $l.Start(); return @{ Listener = $l; Port = $p } } catch { $l.Close() }
+  }
+  throw "No free port between $Start and $End"
+}

@@ -105,3 +105,17 @@ Describe 'Complete-RateTable' {
     $r['Ethernet'].rx | Should Be 5
   }
 }
+
+Describe 'Get-CounterTable staleness' {
+  It 'drops a reading older than 3 s (unplugged or hung adapter)' {
+    $fake = New-Object psobject
+    $fake | Add-Member ScriptMethod Tracked { [uint32[]]@(7, 8) }
+    $fake | Add-Member ScriptMethod Track { param($i) }
+    $fake | Add-Member ScriptMethod Untrack { param($i) }
+    $fake | Add-Member ScriptMethod Read { param($i) if ($i -eq 7) { [double[]]@(100, 50, 19.0) } else { [double[]]@(100, 50, 10.0) } }
+    $paths = @([pscustomobject]@{ Alias = 'Ethernet'; InterfaceIndex = 7 }, [pscustomobject]@{ Alias = 'Ethernet 2'; InterfaceIndex = 8 })
+    $t = Get-CounterTable $paths $fake 20.0
+    $t.ContainsKey('Ethernet') | Should Be $true
+    $t.ContainsKey('Ethernet 2') | Should Be $false
+  }
+}

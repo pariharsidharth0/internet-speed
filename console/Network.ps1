@@ -38,10 +38,10 @@ function Get-ResetLevel {
 function Invoke-ResetJob {
   param($State, $Emit, [bool]$Apply)
   $script = Join-Path $State.Root 'reset-network.ps1'
-  $args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script)
-  if ($Apply) { $args += '-Apply' }
+  $psArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script)
+  if ($Apply) { $psArgs += '-Apply' }
   & $Emit $(if ($Apply) { 'reset-network.ps1 -Apply' } else { 'reset-network.ps1  (report only)' }) 'cmd'
-  & powershell.exe @args 2>&1 | ForEach-Object {
+  & powershell.exe @psArgs 2>&1 | ForEach-Object {
     $line = "$_".TrimEnd()
     if ($line) { & $Emit $line (Get-ResetLevel $line) }
   }

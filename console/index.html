@@ -797,7 +797,7 @@ input.mono { font-family: var(--font-data); font-size: 13px; }
     url: $('url').value.trim(), mode: ui.mode, link: ui.mode === 'one' ? $('onePick').value : null, dir: $('outdir').value.trim() });
   $('btnResume').onclick = () => {
     const d = downloads.current; if (!d) return;
-    startDownload({ url: d.url, mode: d.mode, link: d.link, dir: d.dir });
+    startDownload({ url: d.url, mode: d.mode, link: d.link, dir: d.dir, resume: true });
   };
   $('btnStop').onclick = async () => {
     const d = downloads.current; if (!d) return;

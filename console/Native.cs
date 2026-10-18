@@ -51,6 +51,9 @@ namespace Multilink
 
         private readonly Dictionary<uint, Slot> slots = new Dictionary<uint, Slot>();
 
+        // Same clock as the readings' timestamps.
+        public static double Now() { return (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency; }
+
         public void Track(uint index)
         {
             Slot slot;

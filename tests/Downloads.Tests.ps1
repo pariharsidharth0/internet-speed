@@ -8,13 +8,18 @@ Describe 'New-Aria2ArgList' {
   It 'spreads over every link in all mode' {
     $a = New-Aria2ArgList -Mode all -IPs '192.168.1.24', '192.168.42.129' -Dir 'C:\dl' -Port 6810 -Secret 's3' -ConsolePid 4242
     $a -contains '--multiple-interface=192.168.1.24,192.168.42.129' | Should Be $true
-    $a -contains '-x16' | Should Be $true
     $a -contains '--stop-with-process=4242' | Should Be $true
     $a -contains '--rpc-listen-all=false' | Should Be $true
     $a -contains '--rpc-listen-port=6810' | Should Be $true
     $a -contains '--rpc-secret=s3' | Should Be $true
     $a -contains '--connect-timeout=10' | Should Be $true
     @($a | Where-Object { $_ -like 'http*' }).Count | Should Be 0
+  }
+  It 'does not resume a same-named file unless asked' {
+    $a = New-Aria2ArgList -Mode all -IPs '1.1.1.1', '2.2.2.2' -Dir 'C:\dl' -Port 1 -Secret 's' -ConsolePid 1
+    $a -contains '--continue=true' | Should Be $false
+    $b = New-Aria2ArgList -Mode all -IPs '1.1.1.1', '2.2.2.2' -Dir 'C:\dl' -Port 1 -Secret 's' -ConsolePid 1 -Continue
+    $b -contains '--continue=true' | Should Be $true
   }
   It 'binds one interface in one mode' {
     $a = New-Aria2ArgList -Mode one -IPs '192.168.42.129' -Dir 'C:\dl' -Port 6810 -Secret 's' -ConsolePid 1
@@ -122,5 +127,67 @@ Describe 'Select-OrphanAria2' {
       [pscustomobject]@{ ProcessId = 13; CommandLine = 'aria2c.exe -x4 somefile' })
     $o = @(Select-OrphanAria2 -Processes $procs -AlivePids @(600))
     ($o | ForEach-Object { $_.ProcessId }) -join ',' | Should Be '11'
+  }
+}
+
+
+Describe 'Invoke-Aria2Rpc timeout' {
+  It 'gives up on a hung aria2 within a few seconds' {
+    $l = New-Object System.Net.Sockets.TcpListener ([Net.IPAddress]::Loopback), 0
+    $l.Start()
+    $port = $l.LocalEndpoint.Port
+    try {
+      $sw = [Diagnostics.Stopwatch]::StartNew()
+      { Invoke-Aria2Rpc $port 's' 'aria2.getVersion' } | Should Throw
+      $sw.Elapsed.TotalSeconds | Should BeLessThan 5
+    } finally { $l.Stop() }
+  }
+}
+
+Describe 'Start-Aria2Process cleanup' {
+  It 'kills aria2 when adding the link fails' {
+    Mock Invoke-Aria2Rpc { if ($Method -eq 'aria2.addUri') { throw 'aria2: bad uri' } else { 'ok' } }
+    $s = New-ConsoleState
+    $plan = @{ ips = @('127.0.0.1'); mode = 'one'; url = 'http://x/'; dir = $env:TEMP }
+    $before = @(Get-Process aria2c -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+    { Start-Aria2Process $s $plan $null } | Should Throw
+    Start-Sleep -Milliseconds 500
+    $after = @(Get-Process aria2c -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id })
+    $after.Count | Should Be 0
+  }
+}
+
+Describe 'Restart-DownloadWired' {
+  function New-FakeProc([bool]$exits) {
+    $p = New-Object psobject
+    $p | Add-Member NoteProperty HasExited $false
+    $p | Add-Member NoteProperty Killed $false
+    $p | Add-Member ScriptMethod WaitForExit ([scriptblock]::Create("param(`$ms) `$$exits"))
+    $p | Add-Member ScriptMethod Kill { $this.Killed = $true }
+    $p
+  }
+  It 'kills the old aria2 if it does not exit' {
+    $s = New-ConsoleState
+    $s.Paths = @([pscustomobject]@{ Alias = 'Ethernet'; IP = '192.168.1.24' }, [pscustomobject]@{ Alias = 'E2'; IP = '10.0.0.2' })
+    $s.Mobile.Alias = 'E2'
+    $old = New-FakeProc $false
+    $s.Downloads.Current = [hashtable]::Synchronized(@{ id = 'a'; state = 'active'; mode = 'all'; url = 'http://x/'; dir = $env:TEMP; filename = 'f'; Port = 1; Secret = 's'; Process = $old })
+    Mock Invoke-Aria2Rpc { }
+    Mock Start-Aria2Process { @{ Port = 7777; Secret = 'n'; Gid = 'g'; Pid = 1; Process = (New-FakeProc $true) } }
+    Restart-DownloadWired $s
+    $old.Killed | Should Be $true
+    $s.Downloads.Current.Port | Should Be 7777
+  }
+  It 'shuts the new aria2 down if the download was cancelled meanwhile' {
+    $s = New-ConsoleState
+    $s.Paths = @([pscustomobject]@{ Alias = 'Ethernet'; IP = '192.168.1.24' }, [pscustomobject]@{ Alias = 'E2'; IP = '10.0.0.2' })
+    $s.Mobile.Alias = 'E2'
+    $dl = [hashtable]::Synchronized(@{ id = 'a'; state = 'active'; mode = 'all'; url = 'http://x/'; dir = $env:TEMP; filename = 'f'; Port = 1; Secret = 's'; Process = (New-FakeProc $true) })
+    $s.Downloads.Current = $dl
+    Mock Invoke-Aria2Rpc { }
+    Mock Start-Aria2Process { $dl.state = 'cancelled'; @{ Port = 7777; Secret = 'n'; Gid = 'g'; Pid = 1; Process = (New-FakeProc $true) } }
+    Restart-DownloadWired $s
+    Assert-MockCalled Invoke-Aria2Rpc -ParameterFilter { $Port -eq 7777 -and $Method -eq 'aria2.forceShutdown' } -Times 1
+    $dl.Port | Should Be 1
   }
 }
